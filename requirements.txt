@@ -1,5 +1,0 @@
-numpy>=1.26
-Pillow>=10.1
-pytest>=8
-# Opcional (Blender como módulo Python; alternativa: binário `blender` no PATH)
-# bpy>=4.2
