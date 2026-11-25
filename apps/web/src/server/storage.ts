@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 /** Armazenamento de saídas geradas. Implementação local; trocar por S3 mantendo a interface. */
@@ -9,7 +10,11 @@ export interface MediaStore {
 
 export class LocalMediaStore implements MediaStore {
   private readonly root: string;
-  constructor(root = process.env.STORAGE_DIR ?? path.resolve(process.cwd(), '.data/storage')) {
+  // Na Vercel o disco do projeto é somente leitura e o /tmp é efêmero e por instância:
+  // serve para não quebrar, mas NÃO persiste. Para produção, trocar por S3/Blob (interface MediaStore).
+  constructor(
+    root = process.env.STORAGE_DIR ?? (process.env.VERCEL ? path.join(tmpdir(), 'sm-storage') : path.resolve(process.cwd(), '.data/storage')),
+  ) {
     this.root = path.resolve(root);
   }
 

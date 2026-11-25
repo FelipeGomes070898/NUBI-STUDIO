@@ -7,6 +7,8 @@ import { getWorkspace } from '@/server/workspace';
 import { generateAction } from './actions';
 
 export const dynamic = 'force-dynamic';
+// Server actions herdam este limite: imagens/áudios podem demorar (máx. do plano Hobby com Fluid compute).
+export const maxDuration = 300;
 
 const STATUS_TONE = { SUCCEEDED: 'ok', FAILED: 'err', RUNNING: 'warn', QUEUED: 'warn', CANCELLED: 'off' } as const;
 const STATUS_LABEL = { SUCCEEDED: 'concluído', FAILED: 'falhou', RUNNING: 'em execução', QUEUED: 'na fila', CANCELLED: 'cancelado' } as const;

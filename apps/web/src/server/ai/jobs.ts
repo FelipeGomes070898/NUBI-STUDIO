@@ -155,9 +155,10 @@ export async function executeAIJob(jobId: string): Promise<void> {
         out.providerRequestId = r.requestId;
         if (img.b64) {
           const key = `ai/${job.workspaceId}/${job.id}.png`;
-          await mediaStore.put(key, Buffer.from(img.b64, 'base64'));
-          out.outputStorageKey = key;
-          out.outputMimeType = 'image/png';
+          if (await saveOutput(key, Buffer.from(img.b64, 'base64'), out)) {
+            out.outputStorageKey = key;
+            out.outputMimeType = 'image/png';
+          }
         } else {
           out.outputUrl = img.url;
         }
@@ -167,9 +168,10 @@ export async function executeAIJob(jobId: string): Promise<void> {
       case 'AUDIO': {
         const r = await adapter.generateSpeech({ model: job.providerModelId, input: job.prompt, voice: params.voice });
         const key = `ai/${job.workspaceId}/${job.id}.mp3`;
-        await mediaStore.put(key, r.audio);
-        out.outputStorageKey = key;
-        out.outputMimeType = r.mimeType;
+        if (await saveOutput(key, r.audio, out)) {
+          out.outputStorageKey = key;
+          out.outputMimeType = r.mimeType;
+        }
         out.providerRequestId = r.requestId;
         actual = estimate ? { cost: estimate, source: 'COMPUTED' } : null;
         break;
@@ -183,6 +185,21 @@ export async function executeAIJob(jobId: string): Promise<void> {
     const message = e instanceof ProviderError || e instanceof UserError ? e.message : 'Falha interna ao processar a geração.';
     if (!(e instanceof ProviderError || e instanceof UserError)) console.error('[ai-job]', job.id, e);
     await settle(job, { status: 'FAILED', data: { errorMessage: message.slice(0, 1000) }, actual: null });
+  }
+}
+
+/**
+ * Salva a saída gerada. Se o storage falhar DEPOIS de o provedor ter cobrado, o job continua como
+ * concluído (o custo é debitado) e o problema fica registrado, em vez de perder o débito.
+ */
+async function saveOutput(key: string, data: Uint8Array, out: Partial<Prisma.AIJobUpdateInput>): Promise<boolean> {
+  try {
+    await mediaStore.put(key, data);
+    return true;
+  } catch (e) {
+    console.error('[ai-job] falha ao salvar saída', key, e);
+    out.errorMessage = 'Gerado e cobrado pelo provedor, mas o arquivo não pôde ser salvo (storage indisponível).';
+    return false;
   }
 }
 
