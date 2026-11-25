@@ -1,0 +1,433 @@
+// Social Manager 2.0 — schema.
+// Convenções de dinheiro: tudo em USD, Decimal(14,6) para não perder centavos de fração em gerações baratas.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum SocialPlatform {
+  FACEBOOK
+  TIKTOK
+  YOUTUBE
+  INSTAGRAM
+}
+
+enum VideoFormat {
+  VERTICAL_9_16
+  HORIZONTAL_16_9
+  SQUARE_1_1
+  FLEXIBLE
+}
+
+/// PENDING_AUTH = cadastrada manualmente, ainda sem OAuth (não consegue publicar).
+enum ConnectionStatus {
+  PENDING_AUTH
+  CONNECTED
+  EXPIRED
+  REVOKED
+}
+
+enum PostStatus {
+  DRAFT
+  READY_FOR_APPROVAL
+  APPROVED
+  SCHEDULED
+  QUEUED
+  PUBLISHING
+  PUBLISHED
+  RETRY_SCHEDULED
+  FAILED
+  CANCELLED
+}
+
+enum AIProviderKind {
+  UNIFIED
+  DIRECT
+}
+
+/// Protocolo falado pelo provedor. Novos adapters entram aqui.
+enum AIAdapterType {
+  OPENAI_COMPATIBLE
+}
+
+enum AIModality {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+/// Tarefas do estúdio. Cada uma exige uma modalidade de saída.
+enum AITask {
+  SCRIPT
+  SCRIPT_REVISION
+  CAPTION
+  IMAGE
+  VIDEO
+  NARRATION
+}
+
+enum SelectionMode {
+  AUTO
+  MANUAL
+}
+
+enum AIJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// Origem do custo confirmado de um job.
+enum CostSource {
+  REPORTED // o provedor informou o custo na resposta
+  COMPUTED // calculado a partir do uso real × preço cadastrado do modelo
+}
+
+enum LedgerType {
+  CREDIT // aumenta o saldo (amount > 0)
+  DEBIT // diminui o saldo (amount > 0)
+  ADJUSTMENT // correção manual, amount com sinal
+}
+
+// ───────────────────────── Núcleo ─────────────────────────
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  members      Member[]
+  clients      Client[]
+  groups       AccountGroup[]
+  accounts     SocialAccount[]
+  providers    AIProvider[]
+  taskPrefs    AITaskPreference[]
+  jobs         AIJob[]
+  wallet       Wallet?
+  ledger       UsageLedger[]
+  media        MediaAsset[]
+  publications Publication[]
+}
+
+model Member {
+  id          String    @id @default(cuid())
+  workspaceId String
+  email       String
+  role        String    @default("OWNER")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, email])
+}
+
+model Client {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  name          String
+  notes         String?
+  isActive      Boolean   @default(true)
+  /// Limite mensal de consumo de IA (USD). null = sem limite próprio.
+  monthlyBudget Decimal?  @db.Decimal(14, 6)
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  projects     Project[]
+  groups       AccountGroup[]
+  accounts     SocialAccount[]
+  media        MediaAsset[]
+  publications Publication[]
+  jobs         AIJob[]
+  ledger       UsageLedger[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model Project {
+  id           String        @id @default(cuid())
+  clientId     String
+  name         String
+  client       Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  publications Publication[]
+
+  @@index([clientId])
+}
+
+// ───────────────────────── Contas e grupos ─────────────────────────
+
+/// Grupo de publicação. Independente de cliente: o vínculo com cliente é opcional
+/// e uma conta pode estar em vários grupos.
+model AccountGroup {
+  id            String      @id @default(cuid())
+  workspaceId   String
+  clientId      String?
+  name          String
+  description   String?
+  defaultFormat VideoFormat @default(FLEXIBLE)
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client      Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  memberships GroupMembership[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model SocialAccount {
+  id                     String           @id @default(cuid())
+  workspaceId            String
+  clientId               String?
+  platform               SocialPlatform
+  /// id da conta na plataforma; só é conhecido depois do OAuth.
+  platformAccountId      String?
+  displayName            String
+  handle                 String?
+  connectionStatus       ConnectionStatus @default(PENDING_AUTH)
+  tokenCiphertext        String?
+  refreshTokenCiphertext String?
+  tokenExpiresAt         DateTime?
+  scopes                 String[]
+  isActive               Boolean          @default(true)
+  createdAt              DateTime         @default(now())
+
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client      Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  memberships GroupMembership[]
+  targets     PublicationTarget[]
+
+  @@unique([workspaceId, platform, platformAccountId])
+  @@unique([workspaceId, platform, displayName])
+  @@index([workspaceId, platform])
+}
+
+model GroupMembership {
+  id              String   @id @default(cuid())
+  groupId         String
+  socialAccountId String
+  addedAt         DateTime @default(now())
+
+  group   AccountGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, socialAccountId])
+  @@index([socialAccountId])
+}
+
+// ───────────────────────── Mídia e publicação ─────────────────────────
+
+model MediaAsset {
+  id          String      @id @default(cuid())
+  workspaceId String
+  clientId    String?
+  name        String
+  storageKey  String
+  mimeType    String
+  sizeBytes   BigInt
+  durationSec Float?
+  width       Int?
+  height      Int?
+  format      VideoFormat @default(FLEXIBLE)
+  createdAt   DateTime    @default(now())
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client       Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  publications Publication[]
+
+  @@index([workspaceId, createdAt])
+}
+
+model Publication {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  clientId     String?
+  projectId    String?
+  mediaAssetId String?
+  title        String?
+  body         String?
+  scheduledAt  DateTime?
+  status       PostStatus @default(DRAFT)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client    Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  project   Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  media     MediaAsset?          @relation(fields: [mediaAssetId], references: [id], onDelete: SetNull)
+  targets   PublicationTarget[]
+
+  @@index([workspaceId, scheduledAt, status])
+}
+
+model PublicationTarget {
+  id              String     @id @default(cuid())
+  publicationId   String
+  socialAccountId String
+  platformTitle   String?
+  platformBody    String?
+  status          PostStatus @default(SCHEDULED)
+  platformPostId  String?
+  publishedAt     DateTime?
+  lastError       String?
+  attempts        Int        @default(0)
+
+  publication Publication   @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  account     SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationId, socialAccountId])
+  @@index([status])
+}
+
+// ───────────────────────── AI Gateway ─────────────────────────
+
+model AIProvider {
+  id               String         @id @default(cuid())
+  workspaceId      String
+  name             String
+  kind             AIProviderKind @default(UNIFIED)
+  adapter          AIAdapterType  @default(OPENAI_COMPATIBLE)
+  baseUrl          String
+  /// AES-256-GCM (ver server/crypto.ts). Nunca é devolvido ao browser.
+  secretCiphertext String
+  /// Últimos 4 caracteres da chave, só para o usuário reconhecê-la na tela.
+  secretHint       String
+  isActive         Boolean        @default(true)
+  /// Provedor principal: o roteamento automático prefere os modelos dele.
+  isPrimary        Boolean        @default(false)
+  lastTestedAt     DateTime?
+  lastTestOk       Boolean?
+  lastTestError    String?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime       @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  models    AIModel[]
+  jobs      AIJob[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, isActive])
+}
+
+model AIModel {
+  id              String       @id @default(cuid())
+  providerId      String
+  providerModelId String
+  displayName     String
+  modalities      AIModality[]
+  /// { inputPerMTok?, outputPerMTok?, perImage?, perSecond?, perMChar?, perRequest? } em USD.
+  pricing         Json?
+  /// "PROVIDER" (veio do catálogo) | "MANUAL" (informado pelo usuário)
+  pricingSource   String?
+  isActive        Boolean      @default(true)
+  supportsAsync   Boolean      @default(false)
+  createdAt       DateTime     @default(now())
+
+  provider  AIProvider         @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  jobs      AIJob[]
+  prefs     AITaskPreference[]
+
+  @@unique([providerId, providerModelId])
+}
+
+/// Escolha de modelo por tarefa: AUTO (política decide) ou MANUAL (modelo fixo).
+model AITaskPreference {
+  id               String        @id @default(cuid())
+  workspaceId      String
+  task             AITask
+  mode             SelectionMode @default(AUTO)
+  modelId          String?
+  /// Modelos aprovados pelo workspace como alternativa (ordem = prioridade).
+  fallbackModelIds String[]
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  model     AIModel?  @relation(fields: [modelId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, task])
+}
+
+model AIJob {
+  id                String        @id @default(cuid())
+  workspaceId       String
+  clientId          String?
+  providerId        String
+  modelId           String?
+  /// Snapshot do id do modelo no provedor (o AIModel pode ser removido depois).
+  providerModelId   String
+  requestedBy       String?
+  task              AITask
+  modality          AIModality
+  selectionMode     SelectionMode
+  routeReason       String?
+  prompt            String        @db.Text
+  params            Json?
+  status            AIJobStatus   @default(QUEUED)
+  providerRequestId String?
+  estimatedCost     Decimal?      @db.Decimal(14, 6)
+  /// Valor retido na carteira enquanto o job está QUEUED/RUNNING; zerado ao concluir.
+  reservedAmount    Decimal       @default(0) @db.Decimal(14, 6)
+  actualCost        Decimal?      @db.Decimal(14, 6)
+  costSource        CostSource?
+  currency          String        @default("USD")
+  outputText        String?       @db.Text
+  outputUrl         String?
+  outputStorageKey  String?
+  outputMimeType    String?
+  errorMessage      String?
+  createdAt         DateTime      @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client    Client?    @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  provider  AIProvider @relation(fields: [providerId], references: [id])
+  model     AIModel?   @relation(fields: [modelId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([clientId, createdAt])
+}
+
+// ───────────────────────── Financeiro ─────────────────────────
+
+/// Carteira central do workspace. É um controle interno: o saldo real fica no provedor.
+model Wallet {
+  id                  String   @id @default(cuid())
+  workspaceId         String   @unique
+  currency            String   @default("USD")
+  balance             Decimal  @default(0) @db.Decimal(14, 6)
+  /// Limite global de consumo no mês corrente (UTC). null = sem limite.
+  monthlyLimit        Decimal? @db.Decimal(14, 6)
+  /// Se false, modelos sem preço cadastrado são bloqueados (custo não controlável).
+  allowUnpricedModels Boolean  @default(false)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model UsageLedger {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  clientId     String?
+  aiJobId      String?
+  type         LedgerType
+  amount       Decimal    @db.Decimal(14, 6)
+  balanceAfter Decimal    @db.Decimal(14, 6)
+  currency     String     @default("USD")
+  description  String
+  createdAt    DateTime   @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client    Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([aiJobId])
+}

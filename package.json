@@ -1,0 +1,19 @@
+{
+  "name": "social-manager-2",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "test": "pnpm --filter web test",
+    "typecheck": "pnpm --filter web typecheck",
+    "db:generate": "pnpm --filter @social-manager/db generate",
+    "db:migrate": "pnpm --filter @social-manager/db migrate:dev",
+    "db:deploy": "pnpm --filter @social-manager/db migrate:deploy",
+    "db:seed": "pnpm --filter @social-manager/db seed"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma", "esbuild", "sharp"]
+  }
+}
