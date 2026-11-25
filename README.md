@@ -19,8 +19,9 @@ Plataforma web para gerenciar **grupos de contas sociais** e um **estúdio de IA
 | Central de IA: cadastro de gateway (chave criptografada), teste de conexão, sincronização de catálogo, ativação de modelos, preço por modelo, modelo por tarefa (auto/manual + alternativas aprovadas) | ✅ |
 | Estúdio de IA: texto, imagem e narração via API no formato OpenAI; histórico | ✅ |
 | Carteira: saldo, reserva antes da chamada, débito do custo real, extrato, limites | ✅ |
+| Conexão **YouTube** por login Google (OAuth + PKCE), tokens criptografados e renovação automática; páginas públicas de Privacidade e Termos | ✅ (precisa das chaves `GOOGLE_*`) |
 | Geração de **vídeo** | ⏳ precisa de adapter para o seu gateway (ver `docs/INTEGRATION_CONTRACT.md`) |
-| OAuth das redes, publicação real, agendamento, calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
+| Upload de vídeo para o YouTube, OAuth de Facebook/TikTok, agendamento, calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
 
 > Os adapters foram testados contra um **servidor simulado** no padrão OpenAI, não contra um gateway real. Antes de confiar em produção, rode o fluxo com a sua chave real (e um saldo pequeno).
 
@@ -60,3 +61,10 @@ Com `TEST_DATABASE_URL` (banco já migrado com `prisma migrate deploy`), rodam t
 
 ## Segurança
 Chaves de API e tokens ficam criptografados (AES-256-GCM) e nunca são enviados ao navegador nem logados. Nunca coloque chaves reais no Git. Detalhes e limites conhecidos em `ARCHITECTURE.md`.
+
+## Conectar o YouTube
+1. Google Cloud → projeto → ativar **YouTube Data API v3** → tela de consentimento (Externo; escopos `youtube.upload` e `youtube.readonly`; links de Privacidade/Termos: `<seu-domínio>/privacidade` e `/termos`) → **ID do cliente OAuth** (Aplicativo da Web) com o redirecionamento `<seu-domínio>/api/oauth/youtube/callback`.
+2. Variáveis (Sensitive): `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`. Opcional: `APP_URL` (domínio canônico; na Vercel usa o domínio de produção) e `CONTACT_EMAIL` (aparece na Política de Privacidade).
+3. Novo deploy → *Contas sociais* → **Conectar com YouTube**.
+
+Com a tela de consentimento em modo "Teste", o acesso expira em 7 dias: publique o app. Uploads por API podem ficar privados até a auditoria do Google, e a cota diária é do projeto, não do canal.

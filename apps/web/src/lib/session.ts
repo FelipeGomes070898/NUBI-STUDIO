@@ -32,3 +32,27 @@ export async function verifySession(secret: string | undefined, token: string | 
   if (Number(exp) < Math.floor(now / 1000)) return false;
   return safeEqual(sig, await hmac(secret, exp));
 }
+
+/**
+ * Valor curto assinado (ex.: estado do OAuth em cookie). Formato: "<payload b64url>.<assinatura hex>".
+ * O payload é JSON público (assinado, não cifrado): não colocar segredos nele.
+ */
+const b64u = (str: string) => btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = (str: string) => atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+
+export async function signPayload(secret: string, payload: Record<string, string>, ttlSeconds: number, now = Date.now()): Promise<string> {
+  const body = b64u(JSON.stringify({ ...payload, exp: String(Math.floor(now / 1000) + ttlSeconds) }));
+  return `${body}.${await hmac(secret, body)}`;
+}
+
+export async function verifyPayload(secret: string | undefined, token: string | undefined, now = Date.now()): Promise<Record<string, string> | null> {
+  if (!secret || secret.length < 16 || !token) return null;
+  const [body, sig] = token.split('.');
+  if (!body || !sig || !safeEqual(sig, await hmac(secret, body))) return null;
+  try {
+    const data = JSON.parse(unb64u(body)) as Record<string, string>;
+    return Number(data.exp) >= Math.floor(now / 1000) ? data : null;
+  } catch {
+    return null;
+  }
+}

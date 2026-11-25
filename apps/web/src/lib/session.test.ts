@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { signSession, verifySession } from './session';
+import { signPayload, signSession, verifyPayload, verifySession } from './session';
 
 const secret = 'a-very-long-secret-for-tests-1234';
 
@@ -19,5 +19,18 @@ describe('session', () => {
     expect(await verifySession('curto', t)).toBe(false);
     expect(await verifySession(secret, undefined)).toBe(false);
     expect(await verifySession(secret, 'lixo')).toBe(false);
+  });
+});
+
+describe('payload assinado (estado do OAuth)', () => {
+  it('faz round-trip e rejeita adulteração, expiração e segredo errado', async () => {
+    const t = await signPayload(secret, { state: 'abc', v: 'xyz' }, 600);
+    expect(await verifyPayload(secret, t)).toMatchObject({ state: 'abc', v: 'xyz' });
+    const [body, sig] = t.split('.');
+    expect(await verifyPayload(secret, `${body}x.${sig}`)).toBeNull();
+    expect(await verifyPayload('outro-segredo-bem-longo-9999', t)).toBeNull();
+    expect(await verifyPayload(secret, t, Date.now() + 601_000)).toBeNull();
+    expect(await verifyPayload(undefined, t)).toBeNull();
+    expect(await verifyPayload(secret, 'lixo')).toBeNull();
   });
 });
