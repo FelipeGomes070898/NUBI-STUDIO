@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   }
   const accountId = url.searchParams.get('accountId') ?? '';
   const { verifier, challenge, state } = createPkce();
-  const cookie = await signPayload(process.env.AUTH_SECRET!, { state, verifier, accountId }, 600);
+  const cookie = await signPayload(process.env.AUTH_SECRET!, { p: 'youtube', state, verifier, accountId }, 600);
 
   const res = NextResponse.redirect(buildAuthUrl({ clientId: client.clientId, redirectUri: youtubeRedirectUri(req.url), state, challenge }));
   res.cookies.set(OAUTH_COOKIE, cookie, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/api/oauth', maxAge: 600 });

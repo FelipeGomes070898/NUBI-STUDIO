@@ -25,7 +25,7 @@ export async function GET(req: Request) {
   const saved = await verifyPayload(process.env.AUTH_SECRET, (await cookies()).get('sm_oauth')?.value);
   const state = url.searchParams.get('state');
   const code = url.searchParams.get('code');
-  if (!saved || !state || state !== saved.state || !code) {
+  if (!saved || saved.p !== 'youtube' || !state || state !== saved.state || !code) {
     return done('error', 'Conexão inválida ou expirada. Clique em Conectar de novo.');
   }
 

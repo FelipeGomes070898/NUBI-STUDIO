@@ -34,6 +34,7 @@ export async function deleteAccountAction(fd: FormData) {
 export async function disconnectAccountAction(fd: FormData) {
   await run('/accounts', async (ws) => {
     const r = await disconnectAccount(ws, str(fd, 'entityId'));
+    if (r.platform === 'FACEBOOK') return 'Página desconectada aqui. Para remover o acesso do app também no Facebook, vá em Configurações → Apps e sites.';
     return r.revoked ? 'Conta desconectada e acesso revogado no Google.' : 'Conta desconectada aqui. Se quiser, remova também o acesso em myaccount.google.com/permissions.';
   });
 }

@@ -3,6 +3,9 @@ import { decryptSecret, encryptSecret } from '../crypto';
 import { ProviderError } from '../ai/types';
 import { UserError } from '../errors';
 import {
+  exchangeFacebookCode, exchangeLongLived, fetchGrantedScopes, fetchPages, REQUIRED_FACEBOOK_SCOPE, type FacebookPage, type MetaClient,
+} from './facebook';
+import {
   exchangeCode, fetchMyChannel, refreshAccessToken, revokeToken, YOUTUBE_SCOPES, type GoogleClient,
 } from './youtube';
 
@@ -25,6 +28,18 @@ export function appOrigin(requestUrl: string): string {
 }
 
 export const youtubeRedirectUri = (requestUrl: string) => `${appOrigin(requestUrl)}/api/oauth/youtube/callback`;
+export const facebookRedirectUri = (requestUrl: string) => `${appOrigin(requestUrl)}/api/oauth/facebook/callback`;
+
+export function metaClientFromEnv(): MetaClient {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    throw new UserError('Conexão com Facebook não configurada: defina META_APP_ID e META_APP_SECRET na Vercel e faça um novo deploy.');
+  }
+  return { appId, appSecret };
+}
+
+export const facebookConfigured = () => !!process.env.META_APP_ID && !!process.env.META_APP_SECRET;
 
 /**
  * Conclui a conexão: troca o código, lê o canal e guarda os tokens CRIPTOGRAFADOS.
@@ -88,6 +103,108 @@ export async function connectYoutubeAccount(
   }
 }
 
+export interface FacebookConnectResult {
+  connected: Array<{ accountId: string; page: string; created: boolean }>;
+  /** Mensagem extra quando a conta escolhida não pôde ser associada a uma página específica. */
+  note?: string;
+}
+
+/**
+ * Conclui a conexão do Facebook: troca o código, pega o token longo e grava UMA conta por Página liberada
+ * (o token guardado é o da Página, criptografado). Reconectar atualiza a conta existente pelo id da Página.
+ *  - com accountId: se voltar uma única Página, ela é ligada a essa conta; se voltarem várias, só se o
+ *    nome da Página for igual ao nome da conta (senão a conta escolhida fica como está e dizemos isso).
+ */
+export async function connectFacebookPages(
+  input: { workspaceId: string; code: string; redirectUri: string; accountId?: string },
+  client: MetaClient = metaClientFromEnv(),
+): Promise<FacebookConnectResult> {
+  const short = await exchangeFacebookCode(client, { code: input.code, redirectUri: input.redirectUri });
+  const long = await exchangeLongLived(client, short.accessToken);
+
+  const granted = await fetchGrantedScopes(client, long.accessToken);
+  if (!granted.includes(REQUIRED_FACEBOOK_SCOPE)) {
+    throw new UserError('Autorização incompleta: falta a permissão de publicar em Páginas. Conecte de novo e deixe todas as caixas marcadas.');
+  }
+
+  const pages = await fetchPages(client, long.accessToken);
+  if (pages.length === 0) {
+    throw new UserError('Nenhuma Página foi liberada. Conecte de novo, escolha as Páginas na tela da Meta e confirme que você é administrador delas.');
+  }
+
+  const dataFor = (p: FacebookPage) => ({
+    platformAccountId: p.id,
+    handle: p.username ? `@${p.username}` : null,
+    tokenCiphertext: encryptSecret(p.accessToken),
+    refreshTokenCiphertext: null, // o Facebook não tem refresh token: o token da Página vem do token longo
+    tokenExpiresAt: null, // token de Página derivado de token longo não expira; revogação é detectada ao publicar
+    scopes: granted,
+    connectionStatus: 'CONNECTED' as const,
+    isActive: true,
+  });
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const connected: FacebookConnectResult['connected'] = [];
+      let note: string | undefined;
+
+      let bindTo: { id: string; displayName: string } | null = null;
+      if (input.accountId) {
+        const target = await tx.socialAccount.findFirst({ where: { id: input.accountId, workspaceId: input.workspaceId, platform: 'FACEBOOK' } });
+        if (!target) throw new UserError('A conta escolhida não existe ou não é do Facebook.');
+        bindTo = target;
+      }
+      const bindPage = bindTo
+        ? pages.length === 1
+          ? pages[0]!
+          : pages.find((p) => p.name.toLowerCase() === bindTo!.displayName.toLowerCase())
+        : undefined;
+      if (bindTo && !bindPage) {
+        note = `Voltaram ${pages.length} Páginas e nenhuma tem o nome "${bindTo.displayName}"; elas foram cadastradas pelo nome da Página e a conta "${bindTo.displayName}" ficou como estava.`;
+      }
+
+      for (const page of pages) {
+        const same = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'FACEBOOK', platformAccountId: page.id } });
+        if (bindTo && bindPage?.id === page.id) {
+          if (same && same.id !== bindTo.id) {
+            throw new UserError(`A Página "${page.name}" já está conectada à conta "${same.displayName}". Use aquela conta ou desconecte-a antes.`);
+          }
+          await tx.socialAccount.update({ where: { id: bindTo.id }, data: dataFor(page) });
+          connected.push({ accountId: bindTo.id, page: page.name, created: false });
+        } else if (same) {
+          await tx.socialAccount.update({ where: { id: same.id }, data: dataFor(page) });
+          connected.push({ accountId: same.id, page: page.name, created: false });
+        } else {
+          const taken = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'FACEBOOK', displayName: page.name } });
+          const displayName = taken ? `${page.name} (${page.id.slice(-6)})` : page.name;
+          const acc = await tx.socialAccount.create({ data: { ...dataFor(page), workspaceId: input.workspaceId, platform: 'FACEBOOK', displayName } });
+          connected.push({ accountId: acc.id, page: page.name, created: true });
+        }
+      }
+      return { connected, note };
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      throw new UserError('Já existe uma conta com esse nome ou Página. Renomeie a existente e tente de novo.');
+    }
+    throw e;
+  }
+}
+
+/** Token da Página para publicar. Sem refresh: se a Meta recusar (código 190) o publicador chama markFacebookExpired. */
+export async function getFacebookPageToken(workspaceId: string, accountId: string): Promise<string> {
+  const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId, platform: 'FACEBOOK' } });
+  if (!acc) throw new UserError('Conta não encontrada.');
+  if (acc.connectionStatus !== 'CONNECTED' || !acc.tokenCiphertext) {
+    throw new UserError(`A página "${acc.displayName}" não está conectada ao Facebook. Conecte-a em Contas sociais.`);
+  }
+  return decryptSecret(acc.tokenCiphertext);
+}
+
+export async function markFacebookExpired(workspaceId: string, accountId: string) {
+  await prisma.socialAccount.updateMany({ where: { id: accountId, workspaceId, platform: 'FACEBOOK' }, data: { connectionStatus: 'EXPIRED' } });
+}
+
 /**
  * Access token válido para publicar. Renova sozinho (e persiste) quando perto de expirar.
  * Se o Google disser que o acesso foi revogado/expirou, a conta vira EXPIRED e pede reconexão.
@@ -136,5 +253,5 @@ export async function disconnectAccount(workspaceId: string, accountId: string, 
     where: { id: acc.id },
     data: { tokenCiphertext: null, refreshTokenCiphertext: null, tokenExpiresAt: null, scopes: [], connectionStatus: 'PENDING_AUTH' },
   });
-  return { revoked };
+  return { revoked, platform: acc.platform };
 }

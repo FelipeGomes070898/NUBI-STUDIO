@@ -2,7 +2,7 @@ import { prisma } from '@social-manager/db';
 import { Flash, type Search } from '@/components/Flash';
 import { PLATFORMS, PLATFORM_ICON, PLATFORM_LABEL } from '@/lib/labels';
 import { getWorkspace } from '@/server/workspace';
-import { youtubeConfigured } from '@/server/oauth/connect';
+import { facebookConfigured, youtubeConfigured } from '@/server/oauth/connect';
 import { createAccountAction, deleteAccountAction, disconnectAccountAction, toggleAccountAction } from './actions';
 
 export const dynamic = 'force-dynamic';
@@ -17,6 +17,7 @@ const STATUS: Record<string, [string, string]> = {
 export default async function AccountsPage({ searchParams }: { searchParams: Search }) {
   const q = await searchParams;
   const yt = youtubeConfigured();
+  const fb = facebookConfigured();
   const ws = await getWorkspace();
   const [accounts, clients] = await Promise.all([
     prisma.socialAccount.findMany({
@@ -32,7 +33,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
       <div className="pageHead">
         <div>
           <h1>Contas sociais</h1>
-          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. Por enquanto só o YouTube tem conexão; Facebook e TikTok virão depois.</p>
+          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. YouTube e Facebook já têm conexão; o TikTok virá depois.</p>
         </div>
       </div>
       <Flash ok={q.ok} error={q.error} />
@@ -45,6 +46,17 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
             {!yt && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Falta configurar <code>GOOGLE_CLIENT_ID</code> e <code>GOOGLE_CLIENT_SECRET</code> na Vercel (e fazer um novo deploy).</p>}
           </div>
           <div className="noflex">{yt ? <a className="btn" href="/api/oauth/youtube/start">Conectar com YouTube</a> : <button disabled>Conectar com YouTube</button>}</div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <div>
+            <h3>Conectar páginas do Facebook</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 13 }}>Entre com o Facebook e, na tela da Meta, escolha as Páginas que o sistema pode usar. Cada Página escolhida vira uma conta conectada.</p>
+            {!fb && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Falta configurar <code>META_APP_ID</code> e <code>META_APP_SECRET</code> na Vercel (e fazer um novo deploy).</p>}
+          </div>
+          <div className="noflex">{fb ? <a className="btn" href="/api/oauth/facebook/start">Conectar com Facebook</a> : <button disabled>Conectar com Facebook</button>}</div>
         </div>
       </div>
 
@@ -85,6 +97,9 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
                     <td>{a.memberships.length ? a.memberships.map((m) => m.group.name).join(', ') : <span className="dim">—</span>}</td>
                     <td>{a.client?.name ?? <span className="dim">—</span>}</td>
                     <td className="num">
+                      {a.platform === 'FACEBOOK' && fb && (
+                        <><a className="btn secondary small" href={`/api/oauth/facebook/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
+                      )}
                       {a.platform === 'YOUTUBE' && yt && (
                         <><a className="btn secondary small" href={`/api/oauth/youtube/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
                       )}
