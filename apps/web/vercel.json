@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "pnpm --filter @social-manager/db generate && DATABASE_URL=\"${DATABASE_URL_UNPOOLED:-$DATABASE_URL}\" pnpm --filter @social-manager/db migrate:deploy && next build"
+  "buildCommand": "pnpm --filter @social-manager/db generate && DATABASE_URL=\"${DATABASE_URL_UNPOOLED:-$DATABASE_URL}\" pnpm --filter @social-manager/db migrate:deploy && next build",
+  "crons": [
+    {
+      "path": "/api/cron/publish",
+      "schedule": "0 12 * * *"
+    }
+  ]
 }

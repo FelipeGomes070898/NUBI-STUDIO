@@ -232,6 +232,8 @@ model MediaAsset {
   clientId    String?
   name        String
   storageKey  String
+  /// URL pública (não listada) do arquivo no armazenamento. Usada pelo Facebook para buscar o vídeo.
+  url         String?
   mimeType    String
   sizeBytes   BigInt
   durationSec Float?
@@ -255,6 +257,10 @@ model Publication {
   mediaAssetId String?
   title        String?
   body         String?
+  /// Grupos escolhidos no formulário (só referência: os destinos reais são os PublicationTarget).
+  groupIds     String[]   @default([])
+  /// PUBLIC | PRIVATE
+  visibility   String     @default("PUBLIC")
   scheduledAt  DateTime?
   status       PostStatus @default(DRAFT)
   createdAt    DateTime   @default(now())
@@ -277,15 +283,24 @@ model PublicationTarget {
   platformBody    String?
   status          PostStatus @default(SCHEDULED)
   platformPostId  String?
+  /// Link da publicação na plataforma, quando conhecido.
+  externalUrl     String?
+  /// Horário em que este destino deve sair (cópia do agendamento; base da regra de intervalo mínimo).
+  scheduledAt     DateTime?
+  /// Quando um worker pegou o destino para publicar (detecta execução interrompida).
+  claimedAt       DateTime?
   publishedAt     DateTime?
   lastError       String?
+  /// Aviso não fatal da plataforma (ex.: visibilidade reduzida, enviado como rascunho).
+  note            String?
   attempts        Int        @default(0)
 
   publication Publication   @relation(fields: [publicationId], references: [id], onDelete: Cascade)
   account     SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
 
   @@unique([publicationId, socialAccountId])
-  @@index([status])
+  @@index([status, scheduledAt])
+  @@index([socialAccountId, scheduledAt])
 }
 
 // ───────────────────────── AI Gateway ─────────────────────────

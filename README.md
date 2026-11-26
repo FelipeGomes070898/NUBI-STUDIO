@@ -22,8 +22,9 @@ Plataforma web para gerenciar **grupos de contas sociais** e um **estúdio de IA
 | Conexão **YouTube** por login Google (OAuth + PKCE), tokens criptografados e renovação automática; páginas públicas de Privacidade e Termos | ✅ (precisa das chaves `GOOGLE_*`) |
 | Conexão **Facebook** (Páginas) por login Meta: uma conta por Página liberada, token da Página criptografado | ✅ (precisa das chaves `META_*`) |
 | Conexão **TikTok** por login (OAuth), tokens criptografados e renovação automática | ✅ (precisa das chaves `TIKTOK_*`) |
+| **Publicações**: envio do vídeo uma vez e publicação em YouTube, Facebook e TikTok de uma vez (grupo ou contas escolhidas), agora ou agendada, com intervalo mínimo por conta e registro do último post/agendamento | ✅ (precisa do Vercel Blob e do agendador; ver abaixo) |
 | Geração de **vídeo** | ⏳ precisa de adapter para o seu gateway (ver `docs/INTEGRATION_CONTRACT.md`) |
-| Envio de vídeo para YouTube, Facebook e TikTok, agendamento, calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
+| Calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
 
 > Os adapters foram testados contra um **servidor simulado** no padrão OpenAI, não contra um gateway real. Antes de confiar em produção, rode o fluxo com a sua chave real (e um saldo pequeno).
 
@@ -87,3 +88,17 @@ Com o app em modo **Desenvolvimento**, só quem tem função no app (administrad
 5. Novo deploy → *Contas sociais* → **Conectar com TikTok**.
 
 Enquanto o app não passar na auditoria do TikTok, as postagens diretas ficam restritas (privadas) e só contas de teste (*Sandbox*) conseguem autorizar. Contas conectadas sem permissão de vídeo aparecem marcadas "sem permissão de publicar vídeo". O refresh token do TikTok pode girar a cada renovação; o sistema sempre salva o novo.
+
+## Publicar vídeos
+**Nova publicação** → enviar o vídeo (vai do navegador direto ao Vercel Blob; não passa pelo limite de 4,5 MB da função) → marcar grupos (e desmarcar contas) → título/legenda/visibilidade → *Publicar agora* ou *Agendar*.
+
+Configuração (uma vez):
+1. **Vercel Blob**: no projeto, *Storage → Create → Blob* e conectar ao projeto (cria `BLOB_READ_WRITE_TOKEN`). Os vídeos ficam em endereço público **não listado** (com sufixo aleatório): quem tiver o link consegue ver, e o Facebook precisa disso para buscar o arquivo.
+2. **Agendador**: defina `CRON_SECRET` (≥16 caracteres, `openssl rand -base64 32`) na Vercel e, no GitHub, em *Settings → Secrets and variables → Actions*, os secrets `APP_URL` (ex.: `https://nubi-studio.vercel.app`) e `CRON_SECRET` (o mesmo valor). O workflow `.github/workflows/publish-scheduler.yml` chama `/api/cron/publish` a cada ~5 min. O GitHub pode atrasar execuções agendadas em alguns minutos; o horário é "a partir de", não exato. A Vercel (plano Hobby) também chama 1×/dia. Alternativa mais pontual: um serviço de cron externo (ex.: cron-job.org) fazendo `POST` nesse endereço com o header `Authorization: Bearer <CRON_SECRET>`.
+3. Opcionais: `MAX_VIDEO_MB` (512), `PUBLISH_MIN_GAP_MINUTES` (60), `APP_TIMEZONE` (America/Sao_Paulo).
+
+Regras:
+- **Intervalo mínimo por conta** (60 min): não deixa agendar uma conta a menos de 60 min de outra publicação dela (agendada, em andamento ou já publicada). A mensagem diz qual conta e qual horário bloqueia; há a opção de ignorar. O último post e o último agendamento de cada conta aparecem no formulário.
+- Horários são digitados no fuso do navegador e guardados em UTC.
+- Cada rede tem o seu andamento: uma falha não impede as outras. **Falhas não são repetidas sozinhas** (evita post duplicado); use *Tentar de novo* depois de conferir na rede. Destino "publicando" por mais de 20 min vira falha.
+- YouTube: envio retomável; projetos de API sem auditoria do Google costumam ficar privados (o sistema avisa). Facebook: a Meta busca o vídeo pela URL. TikTok: envio em partes; app sem auditoria só publica como privado, e conta só com `video.upload` recebe o vídeo como rascunho no app.

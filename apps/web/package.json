@@ -9,8 +9,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@social-manager/db": "workspace:*",
     "@prisma/client": "^6.0.0",
+    "@social-manager/db": "workspace:*",
+    "@vercel/blob": "^2.9.0",
     "decimal.js": "^10.4.3",
     "next": "^15.1.0",
     "react": "^19.0.0",

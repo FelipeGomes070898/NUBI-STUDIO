@@ -8,9 +8,10 @@ const NAV: Array<[string, string, string]> = [
   ['/accounts', '◎', 'Contas sociais'],
   ['/ai', '✧', 'Central de IA'],
   ['/ai/studio', '✎', 'Estúdio de IA'],
+  ['/publications', '➤', 'Publicações'],
   ['/billing', '$', 'Custos e consumo'],
 ];
-const SOON = ['Estúdio de vídeos', 'Biblioteca de mídia', 'Calendário', 'Publicações', 'Analytics'];
+const SOON = ['Estúdio de vídeos', 'Biblioteca de mídia', 'Calendário', 'Analytics'];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
