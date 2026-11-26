@@ -17,6 +17,7 @@ d('conexão Facebook (Páginas) — Postgres real', () => {
   const ws = 'ws_default';
 
   const pageOf = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id, name, access_token: `PT-${id}`, tasks: ['CREATE_CONTENT'], ...extra });
+  const withIg = (id: string, username: string) => ({ instagram_business_account: { id, username, name: `Nome ${username}` } });
   let pages: Array<Record<string, unknown>>;
   let granted: Array<{ permission: string; status: string }>;
   let secondPage: Array<Record<string, unknown>> | null; // para testar paginação
@@ -177,5 +178,53 @@ d('conexão Facebook (Páginas) — Postgres real', () => {
     expect(a).toMatchObject({ tokenCiphertext: null, connectionStatus: 'PENDING_AUTH', scopes: [] });
     expect(a.platformAccountId).toBe('222'); // continua associada à Página para reconectar
     await expect(conn.getFacebookPageToken('outro', id2)).rejects.toThrow(/não encontrada/);
+  });
+
+  describe('Instagram (ligado à Página)', () => {
+    const IG_GRANTED = [{ permission: 'pages_show_list', status: 'granted' }, { permission: 'pages_manage_posts', status: 'granted' }, { permission: 'instagram_basic', status: 'granted' }, { permission: 'instagram_content_publish', status: 'granted' }];
+
+    it('cadastra uma conta do Instagram por Página que tenha conta Profissional ligada, com o token da Página', async () => {
+      granted = IG_GRANTED;
+      pages = [pageOf('111', 'Página Um', withIg('ig-1', 'luciano.zeen')), pageOf('222', 'Página Dois'), pageOf('333', 'Página Três', withIg('ig-3', 'canal.tres'))];
+      const r = await connect({ includeInstagram: true });
+      expect(r.instagram.map((i) => i.username).sort()).toEqual(['canal.tres', 'luciano.zeen']);
+      expect(r.pagesWithoutInstagram).toEqual(['Página Dois']);
+      const ig = await db.prisma.socialAccount.findFirstOrThrow({ where: { platform: 'INSTAGRAM', platformAccountId: 'ig-1' } });
+      expect(ig).toMatchObject({ displayName: 'luciano.zeen', handle: '@luciano.zeen', connectionStatus: 'CONNECTED' });
+      expect(crypto.decryptSecret(ig.tokenCiphertext!)).toBe('PT-111'); // token da Página
+      expect(await db.prisma.socialAccount.count({ where: { platform: 'FACEBOOK' } })).toBe(3);
+      expect(calls.find((c) => c.path === '/graph/me/accounts')!.q.fields).toContain('instagram_business_account');
+    });
+
+    it('reconectar não duplica; sem a permissão do Instagram o login é recusado', async () => {
+      granted = IG_GRANTED;
+      pages = [pageOf('111', 'Página Um', withIg('ig-1', 'luciano.zeen'))];
+      await connect({ includeInstagram: true });
+      pages = [pageOf('111', 'Página Um', withIg('ig-1', 'luciano.zeen'))].map((p) => ({ ...p, access_token: 'NOVO' }));
+      const r = await connect({ includeInstagram: true });
+      expect(r.instagram[0]!.created).toBe(false);
+      expect(await db.prisma.socialAccount.count({ where: { platform: 'INSTAGRAM' } })).toBe(1);
+      expect(crypto.decryptSecret((await db.prisma.socialAccount.findFirstOrThrow({ where: { platform: 'INSTAGRAM' } })).tokenCiphertext!)).toBe('NOVO');
+
+      granted = [{ permission: 'pages_manage_posts', status: 'granted' }, { permission: 'instagram_content_publish', status: 'declined' }];
+      await expect(connect({ includeInstagram: true })).rejects.toThrow(/permissão de publicar no Instagram/);
+    });
+
+    it('o botão do Facebook (sem Instagram) não cria contas do Instagram, mesmo que a Página tenha uma', async () => {
+      pages = [pageOf('111', 'Página Um', withIg('ig-1', 'luciano.zeen'))];
+      const r = await connect();
+      expect(r.instagram).toEqual([]);
+      expect(await db.prisma.socialAccount.count({ where: { platform: 'INSTAGRAM' } })).toBe(0);
+    });
+
+    it('token da conta do Instagram sai da mesma conexão; desconectar limpa', async () => {
+      granted = IG_GRANTED;
+      pages = [pageOf('111', 'Página Um', withIg('ig-1', 'luciano.zeen'))];
+      const r = await connect({ includeInstagram: true });
+      const id = r.instagram[0]!.accountId;
+      expect(await conn.getFacebookPageToken(ws, id)).toBe('PT-111');
+      expect(await conn.disconnectAccount(ws, id)).toMatchObject({ platform: 'INSTAGRAM', revoked: false });
+      await expect(conn.getFacebookPageToken(ws, id)).rejects.toThrow(/não está conectada ao Instagram/);
+    });
   });
 });

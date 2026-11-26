@@ -23,8 +23,10 @@ Plataforma web para gerenciar **grupos de contas sociais** e um **estúdio de IA
 | Conexão **Facebook** (Páginas) por login Meta: uma conta por Página liberada, token da Página criptografado | ✅ (precisa das chaves `META_*`) |
 | Conexão **TikTok** por login (OAuth), tokens criptografados e renovação automática | ✅ (precisa das chaves `TIKTOK_*`) |
 | **Publicações**: envio do vídeo uma vez e publicação em YouTube, Facebook e TikTok de uma vez (grupo ou contas escolhidas), agora ou agendada, com intervalo mínimo por conta e registro do último post/agendamento | ✅ (precisa do Vercel Blob e do agendador; ver abaixo) |
+| **Instagram** (conta Profissional ligada à Página): conexão pelo login do Facebook; publicação de Reels e Stories | ✅ (usa as chaves `META_*`; precisa das permissões do Instagram no app da Meta) |
+| **Stories** do Facebook e do Instagram, e **Metas da semana** (1 post / 1 story por conta, domingo a domingo, editáveis) | ✅ |
 | Geração de **vídeo** | ⏳ precisa de adapter para o seu gateway (ver `docs/INTEGRATION_CONTRACT.md`) |
-| Calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
+| Anúncios, resposta automática a mensagens/comentários, insights, calendário, FFmpeg | ⏳ / fora do escopo (ver abaixo e `ROADMAP.md`) |
 
 > Os adapters foram testados contra um **servidor simulado** no padrão OpenAI, não contra um gateway real. Antes de confiar em produção, rode o fluxo com a sua chave real (e um saldo pequeno).
 
@@ -102,3 +104,15 @@ Regras:
 - Horários são digitados no fuso do navegador e guardados em UTC.
 - Cada rede tem o seu andamento: uma falha não impede as outras. **Falhas não são repetidas sozinhas** (evita post duplicado); use *Tentar de novo* depois de conferir na rede. Destino "publicando" por mais de 20 min vira falha.
 - YouTube: envio retomável; projetos de API sem auditoria do Google costumam ficar privados (o sistema avisa). Facebook: a Meta busca o vídeo pela URL. TikTok: envio em partes; app sem auditoria só publica como privado, e conta só com `video.upload` recebe o vídeo como rascunho no app.
+
+## Instagram
+O Instagram é conectado **pelo Facebook**: só funciona com conta **Profissional** (Comercial ou Criador) ligada a uma Página.
+1. No app da Meta, adicione o caso de uso de publicação no Instagram ("Gerenciar mensagens e conteúdo no Instagram", nomes mudam) e habilite `instagram_basic` e `instagram_content_publish` (em modo Desenvolvimento não precisa de revisão para contas suas).
+2. *Contas sociais* → **Conectar Instagram** (o botão do Facebook continua pedindo só as permissões de Página, para não quebrar quem ainda não habilitou o Instagram). Cada Página escolhida que tenha Instagram ligado vira uma conta `INSTAGRAM`.
+3. Post de vídeo no feed é publicado como **Reels**; story em vídeo é aceito até 60 s. Instagram não tem publicação privada pela API. Há limite diário de publicações por API (definido pela Meta).
+4. Permissões extras via `META_INSTAGRAM_SCOPES` (padrão `instagram_basic,instagram_content_publish`).
+
+## Stories e Metas da semana
+- Em **Nova publicação** escolha *Post* ou *Story* (story só no Facebook e no Instagram) e, no post, marque *Postar também como story*. A regra de intervalo mínimo vale **por conta e por tipo**: story não bloqueia post.
+- **Metas da semana** (domingo a domingo): por conta e tipo, mostra feito, agendado e o que falta (padrão 1 por semana; editável, 0 desliga) com o atalho *Criar agora*. A contagem é do sistema; o "Plano" do Facebook é calculado pela Meta e pode demorar a refletir, e nada garante que a Meta conte posts feitos por API da mesma forma.
+- **Não automatizado de propósito:** anúncio (gasta dinheiro), taxa de resposta (responder mensagens/comentários só para bater meta é automação que as plataformas penalizam) e "acessar insights" (a Meta conta dentro do app dela).

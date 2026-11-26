@@ -39,7 +39,7 @@ export default async function PublicationsPage({ searchParams }: { searchParams:
           <div className="card" key={p.id} style={{ marginBottom: 14 }}>
             <div className="row" style={{ alignItems: 'center' }}>
               <div>
-                <h3>{p.title || p.media?.name || 'Sem título'} <span className={`badge ${TONE[p.status]}`}>{LABEL[p.status]}</span></h3>
+                <h3>{p.title || p.media?.name || 'Sem título'} <span className={`badge ${TONE[p.status]}`}>{LABEL[p.status]}</span> {p.kind === 'STORY' && <span className="badge">story</span>}</h3>
                 <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
                   {p.media?.name} · {p.media ? FORMAT_LABEL[p.media.format] : ''} · {p.visibility === 'PRIVATE' ? 'privado' : 'público'} · para sair em <LocalTime iso={p.scheduledAt?.toISOString()} />
                 </div>

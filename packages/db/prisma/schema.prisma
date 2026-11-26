@@ -74,6 +74,12 @@ enum AITask {
   NARRATION
 }
 
+/// POST = vídeo no feed/canal (Reels no Instagram); STORY = story do Facebook/Instagram.
+enum PublicationKind {
+  POST
+  STORY
+}
+
 enum SelectionMode {
   AUTO
   MANUAL
@@ -205,6 +211,7 @@ model SocialAccount {
   client      Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
   memberships GroupMembership[]
   targets     PublicationTarget[]
+  goals       WeeklyGoal[]
 
   @@unique([workspaceId, platform, platformAccountId])
   @@unique([workspaceId, platform, displayName])
@@ -261,6 +268,7 @@ model Publication {
   groupIds     String[]   @default([])
   /// PUBLIC | PRIVATE
   visibility   String     @default("PUBLIC")
+  kind         PublicationKind @default(POST)
   scheduledAt  DateTime?
   status       PostStatus @default(DRAFT)
   createdAt    DateTime   @default(now())
@@ -283,6 +291,8 @@ model PublicationTarget {
   platformBody    String?
   status          PostStatus @default(SCHEDULED)
   platformPostId  String?
+  /// Cópia do tipo da publicação (a regra de intervalo vale por conta e por tipo: story não bloqueia post).
+  kind            PublicationKind @default(POST)
   /// Link da publicação na plataforma, quando conhecido.
   externalUrl     String?
   /// Horário em que este destino deve sair (cópia do agendamento; base da regra de intervalo mínimo).
@@ -300,7 +310,7 @@ model PublicationTarget {
 
   @@unique([publicationId, socialAccountId])
   @@index([status, scheduledAt])
-  @@index([socialAccountId, scheduledAt])
+  @@index([socialAccountId, kind, scheduledAt])
 }
 
 // ───────────────────────── AI Gateway ─────────────────────────
@@ -445,4 +455,19 @@ model UsageLedger {
   @@index([workspaceId, createdAt])
   @@index([clientId, createdAt])
   @@index([aiJobId])
+}
+
+/// Meta semanal de publicações por conta e tipo (semana de domingo a domingo, como o Plano do Facebook).
+/// Sem registro, valem os padrões do sistema (1 por semana).
+model WeeklyGoal {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  socialAccountId String
+  kind            PublicationKind
+  target          Int
+
+  account SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([socialAccountId, kind])
+  @@index([workspaceId])
 }

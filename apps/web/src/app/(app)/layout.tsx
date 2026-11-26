@@ -9,6 +9,7 @@ const NAV: Array<[string, string, string]> = [
   ['/ai', '✧', 'Central de IA'],
   ['/ai/studio', '✎', 'Estúdio de IA'],
   ['/publications', '➤', 'Publicações'],
+  ['/goals', '✓', 'Metas da semana'],
   ['/billing', '$', 'Custos e consumo'],
 ];
 const SOON = ['Estúdio de vídeos', 'Biblioteca de mídia', 'Calendário', 'Analytics'];

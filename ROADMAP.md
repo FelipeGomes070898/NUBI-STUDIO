@@ -9,6 +9,7 @@
 5. Conexão de Páginas do Facebook por login Meta (token da Página criptografado).
 6. Conexão do TikTok por login, com renovação (refresh token girado) e desconexão com revogação.
 7. Publicação multi-rede: upload direto, grupo/contas, agora ou agendada, intervalo mínimo por conta, agendador e andamento por rede.
+8. Instagram (Reels e Stories), Stories do Facebook e Metas da semana por conta e tipo.
 
 ## Próximo
 4. **Vídeo via gateway**: adapter assíncrono para o gateway escolhido (submit → poll → download) + fila BullMQ.

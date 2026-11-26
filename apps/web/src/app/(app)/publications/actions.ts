@@ -28,7 +28,7 @@ export async function registerMediaAction(p: {
 /** Devolve o erro para o formulário (que mantém tudo preenchido); em caso de sucesso, redireciona. */
 export async function publishAction(_prev: PublishState, fd: FormData): Promise<PublishState> {
   await requireSession();
-  let publicationId: string;
+  let publicationIds: string[] = [];
   let runNow = false;
   try {
     const ws = await getWorkspace();
@@ -50,20 +50,22 @@ export async function publishAction(_prev: PublishState, fd: FormData): Promise<
       title: str(fd, 'title'),
       body: str(fd, 'body'),
       visibility: str(fd, 'visibility') === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC',
+      kind: str(fd, 'kind') === 'STORY' ? 'STORY' : 'POST',
+      alsoStory: bool(fd, 'alsoStory'),
       groupIds: fd.getAll('groupIds').map(String),
       accountIds: fd.getAll('accountIds').map(String),
       when,
       timezone: tz,
       ignoreGap: bool(fd, 'ignoreGap'),
     });
-    publicationId = r.publicationId;
+    publicationIds = r.publicationIds;
     runNow = r.runNow;
   } catch (e) {
     return { error: userMessage(e) };
   }
   // "Publicar agora": roda depois da resposta (a função continua viva até o limite de duração)
-  if (runNow) after(() => processDue({ publicationId }).catch((e) => console.error('[publish-now]', e)));
-  redirect(`/publications?ok=${encodeURIComponent(runNow ? 'Publicando agora. Acompanhe o andamento abaixo.' : 'Publicação agendada.')}`);
+  if (runNow) after(async () => { for (const publicationId of publicationIds) await processDue({ publicationId }).catch((e) => console.error('[publish-now]', e)); });
+  redirect(`/publications?ok=${encodeURIComponent(runNow ? 'Publicando agora. Acompanhe o andamento abaixo.' : publicationIds.length > 1 ? 'Post e story agendados.' : 'Publicação agendada.')}`);
 }
 
 export async function retryAction(fd: FormData) {

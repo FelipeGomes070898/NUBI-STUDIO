@@ -1,5 +1,5 @@
 import { readExact } from '../stream';
-import { MB, PublishError, VIDEO_MIME_TYPES, type PublishAccount, type PublishAuth, type PublishInput, type PublishResult, type Publisher } from '../types';
+import { MB, NO_STORY_MESSAGE, PublishError, VIDEO_MIME_TYPES, type PublishAccount, type PublishAuth, type PublishInput, type PublishResult, type Publisher } from '../types';
 
 const API = 'https://open.tiktokapis.com';
 
@@ -54,6 +54,7 @@ export function tiktokPublisher(deps: TiktokPublisherDeps = {}): Publisher {
 
     validate(input: PublishInput) {
       const errs: string[] = [];
+      if (input.kind === 'STORY') errs.push(NO_STORY_MESSAGE('TikTok'));
       const caption = [input.title, input.description].filter(Boolean).join('\n\n');
       if (caption.length > 2200) errs.push('TikTok: título + legenda passam de 2200 caracteres.');
       if (!VIDEO_MIME_TYPES.includes(input.media.mimeType)) errs.push('TikTok: use vídeo MP4, MOV ou WebM.');

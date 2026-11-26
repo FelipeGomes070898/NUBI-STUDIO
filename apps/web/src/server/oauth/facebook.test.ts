@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildFacebookAuthUrl, DEFAULT_FACEBOOK_SCOPES, facebookScopes, metaEndpoints } from './facebook';
+import { buildFacebookAuthUrl, DEFAULT_FACEBOOK_SCOPES, facebookScopes, INSTAGRAM_SCOPES, metaEndpoints } from './facebook';
 
 describe('login com Facebook', () => {
   const save = { s: process.env.META_SCOPES, v: process.env.META_GRAPH_VERSION };
@@ -22,5 +22,17 @@ describe('login com Facebook', () => {
     expect(facebookScopes()).toEqual(['pages_show_list', 'business_management']);
     process.env.META_GRAPH_VERSION = 'v99.0';
     expect(metaEndpoints()).toEqual({ graph: 'https://graph.facebook.com/v99.0', dialog: 'https://www.facebook.com/v99.0/dialog/oauth' });
+  });
+
+  it('Instagram é opt-in: só o botão do Instagram pede as permissões extras (o do Facebook não muda)', () => {
+    expect(facebookScopes()).toEqual(DEFAULT_FACEBOOK_SCOPES);
+    expect(facebookScopes({ instagram: true })).toEqual([...DEFAULT_FACEBOOK_SCOPES, ...INSTAGRAM_SCOPES]);
+    const plain = new URL(buildFacebookAuthUrl({ appId: '1', redirectUri: 'https://a/cb', state: 's' }));
+    const ig = new URL(buildFacebookAuthUrl({ appId: '1', redirectUri: 'https://a/cb', state: 's', instagram: true }));
+    expect(plain.searchParams.get('scope')).not.toContain('instagram');
+    expect(ig.searchParams.get('scope')).toContain('instagram_content_publish');
+    process.env.META_INSTAGRAM_SCOPES = 'instagram_basic';
+    expect(facebookScopes({ instagram: true })).toEqual([...DEFAULT_FACEBOOK_SCOPES, 'instagram_basic']);
+    delete process.env.META_INSTAGRAM_SCOPES;
   });
 });

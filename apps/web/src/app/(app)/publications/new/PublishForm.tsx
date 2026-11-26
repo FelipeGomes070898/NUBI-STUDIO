@@ -11,8 +11,7 @@ export interface FormAccount {
   name: string;
   usable: boolean;
   reason?: string;
-  lastPublished: string | null;
-  lastScheduled: string | null;
+  last: { POST: { published: string | null; scheduled: string | null }; STORY: { published: string | null; scheduled: string | null } };
 }
 export interface FormGroup { id: string; name: string; format: string; formatLabel: string; accountIds: string[] }
 
@@ -36,8 +35,9 @@ function readMeta(file: File): Promise<{ width: number; height: number; duration
 
 const orientation = (w: number, h: number) => (!w || !h ? 'FLEXIBLE' : w === h ? 'SQUARE_1_1' : h > w ? 'VERTICAL_9_16' : 'HORIZONTAL_16_9');
 
-export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, defaultTz }: {
+export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, defaultTz, initialKind, initialAccountIds }: {
   accounts: FormAccount[]; groups: FormGroup[]; blobReady: boolean; maxMb: number; gapMinutes: number; defaultTz: string;
+  initialKind: 'POST' | 'STORY'; initialAccountIds: string[];
 }) {
   const [state, formAction, pending] = useActionState<PublishState, FormData>(publishAction, {});
   const [media, setMedia] = useState<Uploaded | null>(null);
@@ -45,7 +45,9 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
   const [progress, setProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [selGroups, setSelGroups] = useState<Set<string>>(new Set());
-  const [selAccounts, setSelAccounts] = useState<Set<string>>(new Set());
+  const [selAccounts, setSelAccounts] = useState<Set<string>>(new Set(initialAccountIds));
+  const [kind, setKind] = useState<'POST' | 'STORY'>(initialKind);
+  const [alsoStory, setAlsoStory] = useState(false);
   const [mode, setMode] = useState<'NOW' | 'SCHEDULE'>('NOW');
   // Campos controlados: o React 19 limpa campos não controlados depois de cada ação, e o usuário perderia o texto ao errar.
   const [title, setTitle] = useState('');
@@ -67,10 +69,18 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
       for (const id of g.accountIds) if (!stillCovered.has(id)) nextAcc.delete(id);
     } else {
       nextGroups.add(g.id);
-      for (const id of g.accountIds) if (byId.get(id)?.usable) nextAcc.add(id);
+      for (const id of g.accountIds) { const a = byId.get(id); if (a?.usable && (kind === 'POST' || storyOk(a))) nextAcc.add(id); }
     }
     setSelGroups(nextGroups);
     setSelAccounts(nextAcc);
+  }
+  const storyOk = (a: FormAccount) => a.platform === 'FACEBOOK' || a.platform === 'INSTAGRAM';
+  function changeKind(k: 'POST' | 'STORY') {
+    setKind(k);
+    if (k === 'STORY') {
+      setAlsoStory(false);
+      setSelAccounts(new Set([...selAccounts].filter((id) => { const a = byId.get(id); return a && storyOk(a); })));
+    }
   }
   function toggleAccount(id: string) {
     const n = new Set(selAccounts);
@@ -112,12 +122,14 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
     : [];
   const minWhen = useMemo(() => { const d = new Date(Date.now() + 5 * 60_000 - new Date().getTimezoneOffset() * 60_000); return d.toISOString().slice(0, 16); }, []);
   const platforms = (['YOUTUBE', 'FACEBOOK', 'TIKTOK', 'INSTAGRAM'] as const).filter((p) => accounts.some((a) => a.platform === p));
+  const selectedStoryCapable = [...selAccounts].some((id) => { const a = byId.get(id); return a && storyOk(a); });
   const canSubmit = !!media && selAccounts.size > 0 && !pending && !uploading;
 
   return (
     <form action={formAction} className="stack">
       <input type="hidden" name="mediaId" value={media?.id ?? ''} />
       <input type="hidden" name="timezone" value={tz} />
+      <input type="hidden" name="kind" value={kind} />
       {[...selGroups].map((id) => <input key={id} type="hidden" name="groupIds" value={id} />)}
       {[...selAccounts].map((id) => <input key={id} type="hidden" name="accountIds" value={id} />)}
 
@@ -145,6 +157,13 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
 
       <section className="card stack">
         <h3>2. Onde publicar</h3>
+        <div className="row">
+          <label className="inline noflex"><input type="radio" checked={kind === 'POST'} onChange={() => changeKind('POST')} /> Post (vídeo no feed / canal; Reels no Instagram)</label>
+          <label className="inline noflex"><input type="radio" checked={kind === 'STORY'} onChange={() => changeKind('STORY')} /> Story (só Facebook e Instagram)</label>
+        </div>
+        {kind === 'POST' && selectedStoryCapable && (
+          <label className="inline"><input type="checkbox" name="alsoStory" checked={alsoStory} onChange={(e) => setAlsoStory(e.target.checked)} /> Postar também como story no Facebook/Instagram selecionados</label>
+        )}
         {groups.length > 0 && (
           <div>
             <div className="dim" style={{ fontSize: 12, marginBottom: 8 }}>Grupos (marcar um grupo seleciona as contas conectadas dele)</div>
@@ -169,15 +188,17 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
             <div className="dim" style={{ fontSize: 12, margin: '6px 0 8px' }}>{PLATFORM_ICON[p]} {PLATFORM_LABEL[p]}</div>
             <div className="checks">
               {accounts.filter((a) => a.platform === p).map((a) => (
-                <label className="inline" key={a.id} style={a.usable ? undefined : { opacity: 0.55 }}>
-                  <input type="checkbox" disabled={!a.usable} checked={selAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
+                <label className="inline" key={a.id} style={a.usable && (kind === 'POST' || storyOk(a)) ? undefined : { opacity: 0.55 }}>
+                  <input type="checkbox" disabled={!a.usable || (kind === 'STORY' && !storyOk(a))} checked={selAccounts.has(a.id)} onChange={() => toggleAccount(a.id)} />
                   <span>
                     {a.name} {!inAnyGroup.has(a.id) && <small>(sem grupo)</small>}
-                    {a.usable ? (
-                      <small style={{ display: 'block' }}>
-                        último post: {a.lastPublished ? <LocalTime iso={a.lastPublished} /> : 'nenhum'} · agendado até: {a.lastScheduled ? <LocalTime iso={a.lastScheduled} /> : 'nada'}
-                      </small>
-                    ) : <small style={{ display: 'block', color: 'var(--warn)' }}>{a.reason}</small>}
+                    {!a.usable ? <small style={{ display: 'block', color: 'var(--warn)' }}>{a.reason}</small>
+                      : kind === 'STORY' && !storyOk(a) ? <small style={{ display: 'block', color: 'var(--warn)' }}>não tem story</small>
+                      : (
+                        <small style={{ display: 'block' }}>
+                          {kind === 'STORY' ? 'último story' : 'último post'}: {a.last[kind].published ? <LocalTime iso={a.last[kind].published} /> : 'nenhum'} · agendado até: {a.last[kind].scheduled ? <LocalTime iso={a.last[kind].scheduled} /> : 'nada'}
+                        </small>
+                      )}
                   </span>
                 </label>
               ))}
@@ -189,7 +210,7 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
 
       <section className="card stack">
         <h3>3. Texto</h3>
-        <label>Título (obrigatório no YouTube; também entra na legenda das outras redes)
+        <label>Título (obrigatório no YouTube; também entra na legenda das outras redes{kind === 'STORY' ? '; story do Instagram não leva legenda' : ''})
           <input name="title" maxLength={100} value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
         <label>Legenda / descrição
@@ -217,11 +238,11 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
         <label className="inline">
           <input type="checkbox" name="ignoreGap" checked={ignoreGap} onChange={(e) => setIgnoreGap(e.target.checked)} /> Ignorar o intervalo mínimo ({gapMinutes} min) entre publicações da mesma conta
         </label>
-        <small>Para não repetir horário, o sistema recusa marcar uma conta a menos de {gapMinutes} minutos de outra publicação dela (já agendada ou publicada). O último post e o último agendamento de cada conta aparecem na lista acima.</small>
+        <small>Para não repetir horário, o sistema recusa marcar uma conta a menos de {gapMinutes} minutos de outra publicação do mesmo tipo dela (já agendada ou publicada; story e post não se bloqueiam). O último post e o último agendamento de cada conta aparecem na lista acima.</small>
       </section>
 
       <div>
-        <button disabled={!canSubmit}>{pending ? 'Enviando…' : mode === 'NOW' ? 'Publicar agora' : 'Agendar publicação'}</button>
+        <button disabled={!canSubmit}>{pending ? 'Enviando…' : mode === 'NOW' ? (kind === 'STORY' ? 'Publicar story agora' : 'Publicar agora') : kind === 'STORY' ? 'Agendar story' : 'Agendar publicação'}</button>
         {!media && <small> Envie o vídeo primeiro.</small>}
         {media && selAccounts.size === 0 && <small> Escolha ao menos uma conta.</small>}
       </div>

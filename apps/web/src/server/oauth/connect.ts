@@ -3,7 +3,7 @@ import { decryptSecret, encryptSecret } from '../crypto';
 import { ProviderError } from '../ai/types';
 import { UserError } from '../errors';
 import {
-  exchangeFacebookCode, exchangeLongLived, fetchGrantedScopes, fetchPages, REQUIRED_FACEBOOK_SCOPE, type FacebookPage, type MetaClient,
+  exchangeFacebookCode, exchangeLongLived, fetchGrantedScopes, fetchPages, REQUIRED_FACEBOOK_SCOPE, REQUIRED_INSTAGRAM_SCOPE, type FacebookPage, type MetaClient,
 } from './facebook';
 import {
   exchangeTiktokCode, fetchTiktokProfile, refreshTiktokToken, REQUIRED_TIKTOK_SCOPE, revokeTiktokToken, tiktokCanPublish, type TiktokClient,
@@ -120,6 +120,10 @@ export async function connectYoutubeAccount(
 
 export interface FacebookConnectResult {
   connected: Array<{ accountId: string; page: string; created: boolean }>;
+  /** Contas do Instagram descobertas nas Páginas (só quando o login pediu o Instagram). */
+  instagram: Array<{ accountId: string; username: string; created: boolean }>;
+  /** Páginas liberadas que não têm Instagram Profissional ligado. */
+  pagesWithoutInstagram: string[];
   /** Mensagem extra quando a conta escolhida não pôde ser associada a uma página específica. */
   note?: string;
 }
@@ -131,7 +135,7 @@ export interface FacebookConnectResult {
  *    nome da Página for igual ao nome da conta (senão a conta escolhida fica como está e dizemos isso).
  */
 export async function connectFacebookPages(
-  input: { workspaceId: string; code: string; redirectUri: string; accountId?: string },
+  input: { workspaceId: string; code: string; redirectUri: string; accountId?: string; includeInstagram?: boolean },
   client: MetaClient = metaClientFromEnv(),
 ): Promise<FacebookConnectResult> {
   const short = await exchangeFacebookCode(client, { code: input.code, redirectUri: input.redirectUri });
@@ -140,6 +144,10 @@ export async function connectFacebookPages(
   const granted = await fetchGrantedScopes(client, long.accessToken);
   if (!granted.includes(REQUIRED_FACEBOOK_SCOPE)) {
     throw new UserError('Autorização incompleta: falta a permissão de publicar em Páginas. Conecte de novo e deixe todas as caixas marcadas.');
+  }
+
+  if (input.includeInstagram && !granted.includes(REQUIRED_INSTAGRAM_SCOPE)) {
+    throw new UserError('Autorização incompleta: falta a permissão de publicar no Instagram. Conecte de novo e deixe todas as caixas marcadas.');
   }
 
   const pages = await fetchPages(client, long.accessToken);
@@ -196,7 +204,30 @@ export async function connectFacebookPages(
           connected.push({ accountId: acc.id, page: page.name, created: true });
         }
       }
-      return { connected, note };
+
+      // Instagram: uma conta por Página que tenha conta Profissional ligada; usa o token da própria Página
+      const instagram: FacebookConnectResult['instagram'] = [];
+      const pagesWithoutInstagram: string[] = [];
+      if (input.includeInstagram) {
+        for (const page of pages) {
+          const ig = page.instagram;
+          if (!ig) { pagesWithoutInstagram.push(page.name); continue; }
+          const igData = { ...dataFor(page), platformAccountId: ig.id, handle: ig.username ? `@${ig.username}` : null };
+          const label = ig.username ?? ig.name ?? ig.id;
+          const same = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'INSTAGRAM', platformAccountId: ig.id } });
+          if (same) {
+            await tx.socialAccount.update({ where: { id: same.id }, data: igData });
+            instagram.push({ accountId: same.id, username: label, created: false });
+          } else {
+            const taken = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'INSTAGRAM', displayName: label } });
+            const acc = await tx.socialAccount.create({
+              data: { ...igData, workspaceId: input.workspaceId, platform: 'INSTAGRAM', displayName: taken ? `${label} (${ig.id.slice(-6)})` : label },
+            });
+            instagram.push({ accountId: acc.id, username: label, created: true });
+          }
+        }
+      }
+      return { connected, note, instagram, pagesWithoutInstagram };
     });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
@@ -285,16 +316,17 @@ export async function getTiktokAccessToken(workspaceId: string, accountId: strin
 
 /** Token da Página para publicar. Sem refresh: se a Meta recusar (código 190) o publicador chama markFacebookExpired. */
 export async function getFacebookPageToken(workspaceId: string, accountId: string): Promise<string> {
-  const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId, platform: 'FACEBOOK' } });
+  // contas do Instagram usam o token da Página a que estão ligadas (mesma conexão Meta)
+  const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId, platform: { in: ['FACEBOOK', 'INSTAGRAM'] } } });
   if (!acc) throw new UserError('Conta não encontrada.');
   if (acc.connectionStatus !== 'CONNECTED' || !acc.tokenCiphertext) {
-    throw new UserError(`A página "${acc.displayName}" não está conectada ao Facebook. Conecte-a em Contas sociais.`);
+    throw new UserError(`A conta "${acc.displayName}" não está conectada ao ${acc.platform === 'INSTAGRAM' ? 'Instagram' : 'Facebook'}. Conecte-a em Contas sociais.`);
   }
   return decryptSecret(acc.tokenCiphertext);
 }
 
 export async function markFacebookExpired(workspaceId: string, accountId: string) {
-  await prisma.socialAccount.updateMany({ where: { id: accountId, workspaceId, platform: 'FACEBOOK' }, data: { connectionStatus: 'EXPIRED' } });
+  await prisma.socialAccount.updateMany({ where: { id: accountId, workspaceId, platform: { in: ['FACEBOOK', 'INSTAGRAM'] } }, data: { connectionStatus: 'EXPIRED' } });
 }
 
 /**

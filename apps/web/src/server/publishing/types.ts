@@ -1,4 +1,4 @@
-import type { SocialPlatform } from '@social-manager/db';
+import type { PublicationKind, SocialPlatform } from '@social-manager/db';
 
 export interface PublishMedia {
   /** URL pública (não listada) do arquivo. */
@@ -11,6 +11,8 @@ export interface PublishMedia {
 }
 
 export interface PublishInput {
+  /** POST = vídeo no feed/canal; STORY = story (só Facebook e Instagram). */
+  kind: PublicationKind;
   title: string;
   description: string;
   visibility: 'PUBLIC' | 'PRIVATE';
@@ -55,3 +57,5 @@ export class PublishError extends Error {
 export const VIDEO_MIME_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'];
 
 export const MB = 1024 * 1024;
+
+export const NO_STORY_MESSAGE = (platformLabel: string) => `${platformLabel}: não tem story. Story só existe no Facebook e no Instagram.`;

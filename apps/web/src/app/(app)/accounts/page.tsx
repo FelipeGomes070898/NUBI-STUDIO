@@ -35,7 +35,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
       <div className="pageHead">
         <div>
           <h1>Contas sociais</h1>
-          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. YouTube, Facebook e TikTok já têm conexão.</p>
+          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. YouTube, Facebook, Instagram e TikTok já têm conexão.</p>
         </div>
       </div>
       <Flash ok={q.ok} error={q.error} />
@@ -59,6 +59,17 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
             {!fb && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Falta configurar <code>META_APP_ID</code> e <code>META_APP_SECRET</code> na Vercel (e fazer um novo deploy).</p>}
           </div>
           <div className="noflex">{fb ? <a className="btn" href="/api/oauth/facebook/start">Conectar com Facebook</a> : <button disabled>Conectar com Facebook</button>}</div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <div>
+            <h3>Conectar Instagram</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 13 }}>Entra pelo Facebook e cadastra a conta do Instagram <strong>Profissional</strong> (Comercial ou Criador) que estiver ligada a cada Página escolhida. Contas pessoais do Instagram não funcionam.</p>
+            {!fb && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Usa as mesmas chaves do Facebook (<code>META_APP_ID</code> e <code>META_APP_SECRET</code>).</p>}
+          </div>
+          <div className="noflex">{fb ? <a className="btn" href="/api/oauth/facebook/start?instagram=1">Conectar Instagram</a> : <button disabled>Conectar Instagram</button>}</div>
         </div>
       </div>
 
@@ -113,6 +124,9 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
                     <td className="num">
                       {a.platform === 'TIKTOK' && tt && (
                         <><a className="btn secondary small" href={`/api/oauth/tiktok/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
+                      )}
+                      {a.platform === 'INSTAGRAM' && fb && (
+                        <><a className="btn secondary small" href="/api/oauth/facebook/start?instagram=1">{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
                       )}
                       {a.platform === 'FACEBOOK' && fb && (
                         <><a className="btn secondary small" href={`/api/oauth/facebook/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>

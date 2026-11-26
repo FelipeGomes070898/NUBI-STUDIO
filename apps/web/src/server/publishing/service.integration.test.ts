@@ -15,7 +15,7 @@ d('publicação (Postgres real)', () => {
 
   let calls: Array<{ platform: string; account: string; input: PublishInput; token: string }>;
   let behavior: Record<string, (a: PublishAccount) => Promise<{ platformPostId: string; url?: string; note?: string }>>;
-  const stub = (platform: 'YOUTUBE' | 'TIKTOK' | 'FACEBOOK', validate: (i: PublishInput) => string[] = () => []): Publisher => ({
+  const stub = (platform: 'YOUTUBE' | 'TIKTOK' | 'FACEBOOK' | 'INSTAGRAM', validate: (i: PublishInput) => string[] = () => []): Publisher => ({
     platform,
     validate,
     publish: async (acc, input, auth: PublishAuth) => {
@@ -29,10 +29,11 @@ d('publicação (Postgres real)', () => {
     YOUTUBE: stub('YOUTUBE', (i) => (i.title.trim() ? [] : ['YouTube: o título é obrigatório.'])),
     TIKTOK: stub('TIKTOK'),
     FACEBOOK: stub('FACEBOOK'),
+    INSTAGRAM: stub('INSTAGRAM', (i) => (i.kind === 'STORY' && (i.media.durationSec ?? 0) > 60 ? ['Instagram: story em vídeo aceita até 60 segundos.'] : [])),
   });
   const auth = () => ({ getToken: async () => 'tok' });
 
-  let accs: { yt: string; tt: string; fb: string };
+  let accs: { yt: string; tt: string; fb: string; ig: string };
   let mediaId: string;
   const URLS = 'https://abc123.public.blob.vercel-storage.com/videos/v-xyz.mp4';
 
@@ -47,9 +48,9 @@ d('publicação (Postgres real)', () => {
     calls = []; behavior = {};
     await db.prisma.$executeRawUnsafe(`TRUNCATE "Workspace" CASCADE`);
     await db.prisma.workspace.create({ data: { id: ws, name: 't', wallet: { create: {} } } });
-    const mk = (platform: 'YOUTUBE' | 'TIKTOK' | 'FACEBOOK', displayName: string) =>
+    const mk = (platform: 'YOUTUBE' | 'TIKTOK' | 'FACEBOOK' | 'INSTAGRAM', displayName: string) =>
       db.prisma.socialAccount.create({ data: { workspaceId: ws, platform, displayName, platformAccountId: `p-${displayName}`, connectionStatus: 'CONNECTED', tokenCiphertext: 'x', scopes: ['video.publish'] } });
-    accs = { yt: (await mk('YOUTUBE', 'YT')).id, tt: (await mk('TIKTOK', 'TT')).id, fb: (await mk('FACEBOOK', 'FB')).id };
+    accs = { yt: (await mk('YOUTUBE', 'YT')).id, tt: (await mk('TIKTOK', 'TT')).id, fb: (await mk('FACEBOOK', 'FB')).id, ig: (await mk('INSTAGRAM', 'IG')).id };
     mediaId = (await svc.registerMedia({ workspaceId: ws, url: URLS, name: 'v.mp4', sizeBytes: 5_000_000, mimeType: 'video/mp4', width: 1080, height: 1920, durationSec: 30 })).id;
   });
 
@@ -146,10 +147,11 @@ d('publicação (Postgres real)', () => {
       const sched = at(10);
       await create({ when: { mode: 'SCHEDULE', scheduledAt: sched }, accountIds: [accs.tt] });
       const act = await svc.getAccountActivity(ws);
-      expect(act.get(accs.yt)!.lastPublishedAt).toBeTruthy();
-      expect(act.get(accs.yt)!.lastScheduledAt).toBeNull();
-      expect(act.get(accs.tt)!.lastScheduledAt!.getTime()).toBe(sched.getTime());
-      expect(act.get(accs.tt)!.lastPublishedAt).toBeNull();
+      expect(act.get(accs.yt)!.POST.lastPublishedAt).toBeTruthy();
+      expect(act.get(accs.yt)!.POST.lastScheduledAt).toBeNull();
+      expect(act.get(accs.tt)!.POST.lastScheduledAt!.getTime()).toBe(sched.getTime());
+      expect(act.get(accs.tt)!.POST.lastPublishedAt).toBeNull();
+      expect(act.get(accs.tt)!.STORY.lastScheduledAt).toBeNull(); // story é um registro separado
     });
   });
 
@@ -238,6 +240,126 @@ d('publicação (Postgres real)', () => {
       await svc.cancelTarget(ws, (await targets(sch.publicationId))[0]!.id);
       expect((await db.prisma.publication.findUniqueOrThrow({ where: { id: sch.publicationId } })).status).toBe('CANCELLED');
       expect((await run()).claimed).toBe(0); // cancelado não sai
+    });
+  });
+
+  describe('story e Instagram', () => {
+    const at = (h: number) => new Date(Date.now() + h * HOUR);
+
+    it('story só nas redes que têm story; as outras são recusadas com o motivo', async () => {
+      const e = await create({ kind: 'STORY', accountIds: [accs.yt, accs.tt, accs.fb] }).catch((x) => x.message);
+      expect(e).toMatch(/YT: YouTube: não tem story/);
+      expect(e).toMatch(/TT: TikTok: não tem story/);
+      expect(e).not.toMatch(/FB:/);
+      expect(await db.prisma.publication.count()).toBe(0);
+    });
+
+    it('cria story no Facebook e no Instagram e o publicador recebe kind STORY', async () => {
+      const r = await create({ kind: 'STORY', accountIds: [accs.fb, accs.ig] });
+      expect((await db.prisma.publication.findUniqueOrThrow({ where: { id: r.publicationId } })).kind).toBe('STORY');
+      expect((await targets(r.publicationId)).every((t) => t.kind === 'STORY')).toBe(true);
+      await run({ publicationId: r.publicationId });
+      expect(calls.map((c) => `${c.platform}:${c.input.kind}`).sort()).toEqual(['FACEBOOK:STORY', 'INSTAGRAM:STORY']);
+    });
+
+    it('regra das plataformas vale para story (Instagram: até 60s) e no Instagram não há publicação privada no stub', async () => {
+      await db.prisma.mediaAsset.update({ where: { id: mediaId }, data: { durationSec: 90 } });
+      await expect(create({ kind: 'STORY', accountIds: [accs.ig] })).rejects.toThrow(/até 60 segundos/);
+      await expect(create({ kind: 'POST', accountIds: [accs.ig] })).resolves.toBeTruthy(); // como Reels, 90s é aceito
+    });
+
+    it('"postar também como story": 1 publicação de post para todas + 1 de story só para Facebook/Instagram', async () => {
+      const r = await create({ alsoStory: true, accountIds: [accs.yt, accs.tt, accs.fb, accs.ig] });
+      expect(r.publicationIds).toHaveLength(2);
+      const pubs = await db.prisma.publication.findMany({ where: { id: { in: r.publicationIds } }, include: { targets: { include: { account: true } } } });
+      const post = pubs.find((p) => p.kind === 'POST')!;
+      const story = pubs.find((p) => p.kind === 'STORY')!;
+      expect(post.targets).toHaveLength(4);
+      expect(story.targets.map((t) => t.account.displayName).sort()).toEqual(['FB', 'IG']);
+      expect(story.scheduledAt!.getTime()).toBe(post.scheduledAt!.getTime());
+      await expect(create({ alsoStory: true, accountIds: [accs.yt, accs.tt] })).rejects.toThrow(/ao menos uma conta do Facebook ou do Instagram/);
+      expect(await db.prisma.publication.count()).toBe(2); // a tentativa inválida não criou nada
+    });
+
+    it('o intervalo vale por conta E por tipo: story não bloqueia post, mas story não repete story', async () => {
+      const when = at(5);
+      await create({ kind: 'POST', when: { mode: 'SCHEDULE', scheduledAt: when }, accountIds: [accs.fb] });
+      await expect(create({ kind: 'STORY', when: { mode: 'SCHEDULE', scheduledAt: when }, accountIds: [accs.fb] })).resolves.toBeTruthy(); // mesmo horário, tipo diferente
+      const e = await create({ kind: 'STORY', when: { mode: 'SCHEDULE', scheduledAt: new Date(when.getTime() + 20 * 60_000) }, accountIds: [accs.fb] }).catch((x) => x.message);
+      expect(e).toMatch(/FB \[story\] \(FACEBOOK\) já tem publicação/);
+      await expect(create({ kind: 'POST', when: { mode: 'SCHEDULE', scheduledAt: new Date(when.getTime() + 20 * 60_000) }, accountIds: [accs.fb] })).rejects.toThrow(/intervalo mínimo/);
+    });
+
+    it('conflito no story bloqueia o conjunto inteiro (nada é criado pela metade)', async () => {
+      const when = at(7);
+      await create({ kind: 'STORY', when: { mode: 'SCHEDULE', scheduledAt: when }, accountIds: [accs.ig] });
+      const before = await db.prisma.publication.count();
+      await expect(create({ alsoStory: true, when: { mode: 'SCHEDULE', scheduledAt: when }, accountIds: [accs.tt, accs.ig] })).rejects.toThrow(/IG \[story\]/);
+      expect(await db.prisma.publication.count()).toBe(before);
+    });
+
+    it('atividade por tipo: último story separado do último post', async () => {
+      await create({ kind: 'STORY', accountIds: [accs.fb] });
+      await run();
+      const act = await svc.getAccountActivity(ws);
+      expect(act.get(accs.fb)!.STORY.lastPublishedAt).toBeTruthy();
+      expect(act.get(accs.fb)!.POST.lastPublishedAt).toBeNull();
+    });
+
+    it('token recusado no Instagram marca a conta como expirada', async () => {
+      await svc.defaultAuth('INSTAGRAM', ws, accs.ig).onTokenRejected!();
+      expect((await db.prisma.socialAccount.findUniqueOrThrow({ where: { id: accs.ig } })).connectionStatus).toBe('EXPIRED');
+    });
+  });
+
+  describe('metas semanais', () => {
+    let goals: typeof import('./goals');
+    beforeAll(async () => { goals = await import('./goals'); });
+    const row = (rows: Awaited<ReturnType<typeof goals.getWeeklyProgress>>['rows'], name: string, kind: 'POST' | 'STORY') => rows.find((r) => r.accountName === name && r.kind === kind)!;
+
+    it('padrão: 1 post e 1 story no Facebook/Instagram, 1 post no YouTube/TikTok; sem story onde não existe', async () => {
+      const { rows, summary } = await goals.getWeeklyProgress(ws);
+      expect(rows.map((r) => `${r.accountName}:${r.kind}:${r.target}`).sort()).toEqual(['FB:POST:1', 'FB:STORY:1', 'IG:POST:1', 'IG:STORY:1', 'TT:POST:1', 'YT:POST:1']);
+      expect(rows.every((r) => r.status === 'PENDING' && r.isDefault)).toBe(true);
+      expect(summary).toMatchObject({ total: 6, done: 0, pending: 6 });
+    });
+
+    it('conta só o que foi PUBLICADO nesta semana, separa agendado e ignora a semana passada e falhas', async () => {
+      await create({ accountIds: [accs.yt] }); await run();                                     // YT post publicado agora
+      await create({ kind: 'STORY', accountIds: [accs.fb] }); await run();                     // FB story publicado agora
+      const old = await create({ accountIds: [accs.tt], ignoreGap: true }); await run();         // TT publicado... e depois "envelhece"
+      await db.prisma.publicationTarget.updateMany({ where: { publicationId: old.publicationId }, data: { publishedAt: new Date(Date.now() - 10 * 24 * HOUR) } });
+      behavior.IG = async () => { throw new PublishError('falha'); };
+      await create({ kind: 'STORY', accountIds: [accs.ig] }); await run();                      // falhou: não conta
+      const { rows, summary } = await goals.getWeeklyProgress(ws);
+      expect(row(rows, 'YT', 'POST')).toMatchObject({ done: 1, status: 'DONE' });
+      expect(row(rows, 'FB', 'STORY')).toMatchObject({ done: 1, status: 'DONE' });
+      expect(row(rows, 'FB', 'POST').status).toBe('PENDING');
+      expect(row(rows, 'TT', 'POST')).toMatchObject({ done: 0, status: 'PENDING' });
+      expect(row(rows, 'IG', 'STORY')).toMatchObject({ done: 0, status: 'PENDING' });
+      expect(summary.done).toBe(2);
+    });
+
+    it('agendado dentro da semana cobre a meta ("agendada"); fora da semana não cobre', async () => {
+      const { end } = goals.weekRange(new Date());
+      await create({ when: { mode: 'SCHEDULE', scheduledAt: new Date(Date.now() + 2 * HOUR < end.getTime() ? Date.now() + 2 * HOUR : end.getTime() - HOUR) }, accountIds: [accs.tt] });
+      await create({ when: { mode: 'SCHEDULE', scheduledAt: new Date(end.getTime() + 2 * HOUR) }, accountIds: [accs.fb] });
+      const { rows } = await goals.getWeeklyProgress(ws);
+      expect(row(rows, 'TT', 'POST')).toMatchObject({ scheduled: 1, status: 'SCHEDULED' });
+      expect(row(rows, 'FB', 'POST')).toMatchObject({ scheduled: 0, status: 'PENDING' });
+    });
+
+    it('meta editável (0 desliga), validada, e story não existe em YouTube/TikTok', async () => {
+      await goals.setWeeklyGoal(ws, accs.fb, 'STORY', 3);
+      await goals.setWeeklyGoal(ws, accs.yt, 'POST', 0);
+      const { rows, summary } = await goals.getWeeklyProgress(ws);
+      expect(row(rows, 'FB', 'STORY')).toMatchObject({ target: 3, isDefault: false });
+      expect(row(rows, 'YT', 'POST').status).toBe('OFF');
+      expect(summary.total).toBe(5); // a desligada não conta
+      await expect(goals.setWeeklyGoal(ws, accs.yt, 'STORY', 1)).rejects.toThrow(/Story só existe/);
+      await expect(goals.setWeeklyGoal(ws, accs.fb, 'POST', 51)).rejects.toThrow(/entre 0 e 50/);
+      await expect(goals.setWeeklyGoal(ws, accs.fb, 'POST', 1.5)).rejects.toThrow(/inteiro/);
+      await expect(goals.setWeeklyGoal('outro', accs.fb, 'POST', 1)).rejects.toThrow(/não encontrada/);
     });
   });
 

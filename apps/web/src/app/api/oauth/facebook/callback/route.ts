@@ -32,9 +32,17 @@ export async function GET(req: Request) {
 
   try {
     const ws = await getWorkspace();
-    const r = await connectFacebookPages({ workspaceId: ws.id, code, redirectUri: facebookRedirectUri(req.url), accountId: saved.accountId || undefined });
+    const includeInstagram = saved.ig === '1';
+    const r = await connectFacebookPages({ workspaceId: ws.id, code, redirectUri: facebookRedirectUri(req.url), accountId: saved.accountId || undefined, includeInstagram });
     const names = r.connected.map((c) => `"${c.page}"`).join(', ');
-    return done('ok', `${r.connected.length} página(s) conectada(s): ${names}.${r.note ? ` ${r.note}` : ''}`);
+    let msg = `${r.connected.length} página(s) conectada(s): ${names}.`;
+    if (includeInstagram) {
+      msg += r.instagram.length
+        ? ` Instagram: ${r.instagram.length} conta(s) conectada(s) (${r.instagram.map((i) => `@${i.username.replace(/^@/, '')}`).join(', ')}).`
+        : ' Nenhuma conta do Instagram Profissional está ligada às Páginas escolhidas.';
+      if (r.instagram.length && r.pagesWithoutInstagram.length) msg += ` Sem Instagram ligado: ${r.pagesWithoutInstagram.join(', ')}.`;
+    }
+    return done('ok', `${msg}${r.note ? ` ${r.note}` : ''}`);
   } catch (e) {
     return done('error', userMessage(e));
   }

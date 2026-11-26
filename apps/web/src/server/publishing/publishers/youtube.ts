@@ -1,4 +1,4 @@
-import { PublishError, VIDEO_MIME_TYPES, type PublishAccount, type PublishAuth, type PublishInput, type PublishResult, type Publisher } from '../types';
+import { NO_STORY_MESSAGE, PublishError, VIDEO_MIME_TYPES, type PublishAccount, type PublishAuth, type PublishInput, type PublishResult, type Publisher } from '../types';
 
 const UPLOAD_BASE = 'https://www.googleapis.com/upload/youtube/v3';
 
@@ -26,6 +26,7 @@ export function youtubePublisher(deps: YoutubePublisherDeps = {}): Publisher {
 
     validate(input: PublishInput) {
       const errs: string[] = [];
+      if (input.kind === 'STORY') errs.push(NO_STORY_MESSAGE('YouTube'));
       if (!input.title.trim()) errs.push('YouTube: o título é obrigatório.');
       if (input.title.length > 100) errs.push('YouTube: o título passa de 100 caracteres.');
       if (/[<>]/.test(input.title + input.description)) errs.push('YouTube: título e descrição não aceitam os caracteres < e >.');

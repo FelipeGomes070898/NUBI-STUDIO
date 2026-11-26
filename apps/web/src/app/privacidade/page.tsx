@@ -12,6 +12,7 @@ export default function Privacidade() {
       <ul>
         <li><strong>Identificação do canal do YouTube</strong> conectado por você: id, nome e endereço (@) do canal.</li>
         <li><strong>Identificação das Páginas do Facebook</strong> que você liberar: id, nome e nome de usuário da Página. Não acessamos seu perfil pessoal, amigos ou mensagens.</li>
+        <li><strong>Identificação da conta do Instagram Profissional</strong> ligada à Página que você liberar: id e nome de usuário. Não acessamos mensagens, seguidores nem o conteúdo de outras contas.</li>
         <li><strong>Identificação do perfil do TikTok</strong> conectado por você: identificador da conta e nome de exibição.</li>
         <li><strong>Tokens de acesso</strong> fornecidos pelo Google, pela Meta e pelo TikTok quando você autoriza a conexão, usados apenas para publicar vídeos no canal, na Página ou no perfil que você conectou.</li>
         <li>Os vídeos e textos que você mesmo envia ou gera no sistema.</li>
@@ -29,6 +30,7 @@ export default function Privacidade() {
         <li>No sistema, use <em>Contas sociais → Desconectar</em>: os tokens são apagados do nosso banco e, no YouTube, o acesso também é revogado no Google.</li>
         <li>YouTube: remova o acesso a qualquer momento em <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
         <li>Facebook: remova o app em <em>Configurações → Apps e sites</em> da sua conta do Facebook.</li>
+        <li>Instagram: remova o app em <em>Configurações → Apps e sites</em> (ou pelo Facebook, em <em>Configurações → Apps e sites</em>).</li>
         <li>TikTok: remova o app em <em>Configurações → Segurança e permissões → Apps e serviços</em>.</li>
         <li>Para pedir a exclusão dos dados do seu canal, entre em contato{contact ? <>: <a href={`mailto:${contact}`}>{contact}</a></> : ' com o administrador do sistema'}.</li>
       </ul>

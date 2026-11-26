@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PublishError, type PublishAccount, type PublishAuth, type PublishInput } from '../types';
 import { facebookPublisher } from './facebook';
+import { instagramPublisher } from './instagram';
 import { tiktokPublisher } from './tiktok';
 import { youtubePublisher } from './youtube';
 
@@ -34,7 +35,7 @@ beforeEach(() => { log = []; handler = (_r, _b, res) => res.writeHead(404).end('
 const json = (res: http.ServerResponse, status: number, o: unknown, headers: Record<string, string> = {}) =>
   res.writeHead(status, { 'content-type': 'application/json', ...headers }).end(JSON.stringify(o));
 
-const input = (o: Partial<PublishInput> = {}): PublishInput => ({
+const input = (o: Partial<PublishInput> = {}): PublishInput => ({ kind: 'POST',
   title: 'Meu vídeo', description: 'Descrição #teste', visibility: 'PUBLIC',
   media: { url: `${base}/media.mp4`, sizeBytes: VIDEO.length, mimeType: 'video/mp4', durationSec: 30 }, ...o,
 });
@@ -223,5 +224,105 @@ describe('TikTok', () => {
     expect(tt().validate(input({ description: 'x'.repeat(2300) }))[0]).toMatch(/2200/);
     expect(tt().validate(input({ media: { ...input().media, mimeType: 'video/avi' } }))[0]).toMatch(/MP4, MOV ou WebM/);
     await expect(tt().publish(acct({ scopes: direct }), input({ media: { ...input().media, durationSec: 9999 } }), auth)).rejects.toThrow(/passa do máximo de 600s/);
+  });
+});
+
+describe('Facebook — story', () => {
+  const fb = () => facebookPublisher({ graph: `${base}/graph` });
+  const storyInput = () => input({ kind: 'STORY' });
+
+  it('inicia, manda a URL do vídeo para a Meta buscar (rupload) e finaliza', async () => {
+    handler = (req, body, res) => {
+      if (req.url === '/graph/PAGE1/video_stories') {
+        const f = Object.fromEntries(new URLSearchParams(body.toString()));
+        return f.upload_phase === 'start' ? json(res, 200, { video_id: 'V9', upload_url: `${base}/rupload/V9` }) : json(res, 200, { success: true, post_id: 'POST9' });
+      }
+      if (req.url === '/rupload/V9') return json(res, 200, { success: true });
+      res.writeHead(404).end();
+    };
+    const r = await fb().publish(acct(), storyInput(), auth);
+    expect(r).toMatchObject({ platformPostId: 'POST9' });
+    expect(r.note).toMatch(/processar/);
+    const up = log.find((l) => l.path === '/rupload/V9')!;
+    expect(up.headers.authorization).toBe('OAuth TOKEN-1');
+    expect(up.headers.file_url).toBe(`${base}/media.mp4`);
+    const fin = Object.fromEntries(new URLSearchParams(log.filter((l) => l.path === '/graph/PAGE1/video_stories')[1]!.body.toString()));
+    expect(fin).toMatchObject({ upload_phase: 'finish', video_id: 'V9', access_token: 'TOKEN-1' });
+    expect(log.some((l) => l.path.endsWith('/videos'))).toBe(false); // não usa o endpoint de vídeo comum
+  });
+
+  it('token recusado pede reconexão; story privado e longo demais são recusados antes de chamar', async () => {
+    handler = (_r, _b, res) => json(res, 400, { error: { code: 190 } });
+    await expect(fb().publish(acct(), storyInput(), auth)).rejects.toThrow(/Reconecte/);
+    expect(rejected).toBe(1);
+    expect(fb().validate(input({ kind: 'STORY', visibility: 'PRIVATE' }))[0]).toMatch(/não pode ser privado/);
+    expect(fb().validate(input({ kind: 'STORY', media: { ...input().media, durationSec: 300 } }))[0]).toMatch(/120 segundos/);
+  });
+});
+
+describe('Instagram', () => {
+  const ig = (o = {}) => instagramPublisher({ graph: `${base}/graph`, pollIntervalMs: 1, pollAttempts: 4, ...o });
+  let statusCodes: string[];
+  let mediaBodies: Array<Record<string, string>>;
+  beforeEach(() => {
+    statusCodes = ['IN_PROGRESS', 'FINISHED']; mediaBodies = [];
+    handler = (req, body, res) => {
+      const u = new URL(req.url!, 'http://x');
+      if (u.pathname === '/graph/IG1/media') { mediaBodies.push(Object.fromEntries(new URLSearchParams(body.toString()))); return void json(res, 200, { id: 'CONT1' }); }
+      if (u.pathname === '/graph/CONT1') return void json(res, 200, { status_code: statusCodes.shift() ?? 'IN_PROGRESS' });
+      if (u.pathname === '/graph/IG1/media_publish') return void json(res, 200, { id: 'MEDIA1' });
+      if (u.pathname === '/graph/MEDIA1') return void json(res, 200, { permalink: 'https://www.instagram.com/reel/abc/' });
+      res.writeHead(404).end();
+    };
+  });
+
+  it('post de vídeo vira Reels: cria o contêiner, espera processar e publica', async () => {
+    const r = await ig().publish(acct({ platformAccountId: 'IG1' }), input(), auth);
+    expect(r).toEqual({ platformPostId: 'MEDIA1', url: 'https://www.instagram.com/reel/abc/' });
+    expect(mediaBodies[0]).toMatchObject({ media_type: 'REELS', video_url: `${base}/media.mp4`, caption: 'Meu vídeo\n\nDescrição #teste', share_to_feed: 'true', access_token: 'TOKEN-1' });
+    const paths = log.map((l) => `${l.method} ${l.path.split('?')[0]}`);
+    expect(paths.indexOf('POST /graph/IG1/media')).toBeLessThan(paths.indexOf('GET /graph/CONT1'));
+    expect(paths.indexOf('GET /graph/CONT1')).toBeLessThan(paths.indexOf('POST /graph/IG1/media_publish'));
+    expect(log.filter((l) => l.path.startsWith('/graph/CONT1')).length).toBe(2); // IN_PROGRESS → FINISHED
+    expect(log.find((l) => l.path === '/graph/IG1/media')!.path).not.toContain('TOKEN-1'); // token no corpo, não na URL
+  });
+
+  it('story usa STORIES e não envia legenda', async () => {
+    const r = await ig().publish(acct({ platformAccountId: 'IG1' }), input({ kind: 'STORY' }), auth);
+    expect(mediaBodies[0]).toMatchObject({ media_type: 'STORIES', video_url: `${base}/media.mp4` });
+    expect(mediaBodies[0]!.caption).toBeUndefined();
+    expect(mediaBodies[0]!.share_to_feed).toBeUndefined();
+    expect(r.url).toBeUndefined();
+  });
+
+  it('erro de processamento, demora demais, token inválido e códigos conhecidos viram mensagens claras', async () => {
+    statusCodes = ['ERROR'];
+    await expect(ig().publish(acct({ platformAccountId: 'IG1' }), input(), auth)).rejects.toThrow(/não conseguiu processar/);
+    statusCodes = [];
+    await expect(ig().publish(acct({ platformAccountId: 'IG1' }), input(), auth)).rejects.toThrow(/demorou demais/);
+    handler = (_r, _b, res) => json(res, 400, { error: { code: 190, message: 'TOKEN-1' } });
+    const e = await ig().publish(acct({ platformAccountId: 'IG1' }), input(), auth).catch((x) => x);
+    expect(e.message).toMatch(/Reconecte/);
+    expect(e.message).not.toContain('TOKEN-1');
+    expect(rejected).toBe(1);
+    handler = (_r, _b, res) => json(res, 400, { error: { code: 100, error_subcode: 2207026 } });
+    await expect(ig().publish(acct({ platformAccountId: 'IG1' }), input(), auth)).rejects.toThrow(/H\.264/);
+    await expect(ig().publish(acct({ platformAccountId: null }), input(), auth)).rejects.toThrow(/Reconecte/);
+  });
+
+  it('valida: sem privado, MP4/MOV, story até 60s, legenda até 2200', () => {
+    expect(ig().validate(input({ visibility: 'PRIVATE' }))[0]).toMatch(/não existe publicação privada/);
+    expect(ig().validate(input({ media: { ...input().media, mimeType: 'video/webm' } }))[0]).toMatch(/MP4 ou MOV/);
+    expect(ig().validate(input({ kind: 'STORY', media: { ...input().media, durationSec: 61 } }))[0]).toMatch(/até 60 segundos/);
+    expect(ig().validate(input({ kind: 'POST', media: { ...input().media, durationSec: 61 } }))).toEqual([]);
+    expect(ig().validate(input({ description: 'x'.repeat(2300) }))[0]).toMatch(/2200/);
+    expect(ig().validate(input())).toEqual([]);
+  });
+});
+
+describe('YouTube e TikTok não têm story', () => {
+  it('recusam story na validação', () => {
+    expect(youtubePublisher().validate(input({ kind: 'STORY' })).join(' ')).toMatch(/YouTube: não tem story/);
+    expect(tiktokPublisher().validate(input({ kind: 'STORY' })).join(' ')).toMatch(/TikTok: não tem story/);
   });
 });

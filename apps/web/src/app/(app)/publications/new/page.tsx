@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
 // A publicação "agora" continua rodando depois da resposta, até este limite.
 export const maxDuration = 300;
 
-const SUPPORTED = ['YOUTUBE', 'FACEBOOK', 'TIKTOK'];
+const SUPPORTED = ['YOUTUBE', 'FACEBOOK', 'INSTAGRAM', 'TIKTOK'];
 
-export default async function NewPublicationPage() {
+export default async function NewPublicationPage({ searchParams }: { searchParams: Promise<{ kind?: string; accounts?: string }> }) {
+  const q = await searchParams;
   const ws = await getWorkspace();
   const [accounts, groups, activity] = await Promise.all([
     prisma.socialAccount.findMany({ where: { workspaceId: ws.id }, orderBy: [{ platform: 'asc' }, { displayName: 'asc' }] }),
@@ -29,8 +30,10 @@ export default async function NewPublicationPage() {
     else if (a.connectionStatus !== 'CONNECTED') reason = a.connectionStatus === 'EXPIRED' ? 'acesso expirado: reconecte' : 'não conectada';
     return {
       id: a.id, platform: a.platform, name: a.displayName, usable: !reason, reason,
-      lastPublished: act?.lastPublishedAt?.toISOString() ?? null,
-      lastScheduled: act?.lastScheduledAt?.toISOString() ?? null,
+      last: {
+        POST: { published: act?.POST.lastPublishedAt?.toISOString() ?? null, scheduled: act?.POST.lastScheduledAt?.toISOString() ?? null },
+        STORY: { published: act?.STORY.lastPublishedAt?.toISOString() ?? null, scheduled: act?.STORY.lastScheduledAt?.toISOString() ?? null },
+      },
     };
   });
   const formGroups: FormGroup[] = groups.filter((g) => g.isActive).map((g) => ({
@@ -52,6 +55,8 @@ export default async function NewPublicationPage() {
         maxMb={Math.round(maxVideoBytes() / 1024 / 1024)}
         gapMinutes={minGapMinutes()}
         defaultTz={DEFAULT_TIMEZONE}
+        initialKind={q.kind === 'STORY' ? 'STORY' : 'POST'}
+        initialAccountIds={(q.accounts ?? '').split(',').filter((id) => formAccounts.some((a) => a.id === id && a.usable))}
       />
     </>
   );
