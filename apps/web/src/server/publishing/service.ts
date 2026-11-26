@@ -1,4 +1,5 @@
 import { prisma, Prisma, type PostStatus, type PublicationKind, type SocialPlatform, type VideoFormat } from '@social-manager/db';
+import { assertOwnBlobUrl } from '../blobUrl';
 import { UserError } from '../errors';
 import { getFacebookPageToken, getTiktokAccessToken, getYoutubeAccessToken, markFacebookExpired } from '../oauth/connect';
 import { defaultPublishers, publisherFor, type PublisherRegistry } from './publishers';
@@ -14,9 +15,6 @@ export const maxVideoBytes = () => (Number(process.env.MAX_VIDEO_MB) > 0 ? Numbe
 
 // ── Mídia ─────────────────────────────────────────────────
 
-/** O arquivo só pode estar no nosso armazenamento (Vercel Blob): o servidor vai baixá-lo e a Meta vai buscá-lo. */
-const BLOB_HOST = /^[a-z0-9-]+\.public\.blob\.vercel-storage\.com$/;
-
 export function formatFromSize(w?: number | null, h?: number | null): VideoFormat {
   if (!w || !h) return 'FLEXIBLE';
   if (w === h) return 'SQUARE_1_1';
@@ -27,15 +25,7 @@ export async function registerMedia(input: {
   workspaceId: string; url: string; name: string; sizeBytes: number; mimeType: string;
   width?: number | null; height?: number | null; durationSec?: number | null; clientId?: string | null;
 }) {
-  let host: string;
-  try {
-    const u = new URL(input.url);
-    if (u.protocol !== 'https:') throw new Error();
-    host = u.hostname;
-  } catch {
-    throw new UserError('Endereço do vídeo inválido.');
-  }
-  if (!BLOB_HOST.test(host)) throw new UserError('O vídeo precisa ter sido enviado pelo próprio sistema.');
+  assertOwnBlobUrl(input.url, 'vídeo');
   if (!VIDEO_MIME_TYPES.includes(input.mimeType)) throw new UserError('Formato não aceito. Use MP4, MOV ou WebM.');
   if (!Number.isFinite(input.sizeBytes) || input.sizeBytes <= 0) throw new UserError('Tamanho do vídeo inválido.');
   if (input.sizeBytes > maxVideoBytes()) throw new UserError(`O vídeo passa do limite de ${Math.round(maxVideoBytes() / 1024 / 1024)} MB.`);
@@ -72,6 +62,9 @@ export interface CreatePublicationInput {
   visibility: 'PUBLIC' | 'PRIVATE';
   /** POST (padrão) = vídeo no feed/canal; STORY = story (só Facebook e Instagram). */
   kind?: PublicationKind;
+  /** Tags do YouTube e capa (URL do nosso armazenamento) vindas do Estúdio. */
+  tags?: string[];
+  thumbnailUrl?: string | null;
   /** Além do post, publica também como story nas contas do Facebook/Instagram escolhidas. */
   alsoStory?: boolean;
   groupIds: string[];
@@ -84,11 +77,13 @@ export interface CreatePublicationInput {
   now?: Date;
 }
 
-function toPublishInput(p: { title: string | null; body: string | null; visibility: string; kind: PublicationKind }, m: { url: string | null; sizeBytes: bigint; mimeType: string; width: number | null; height: number | null; durationSec: number | null }): PublishInput {
+function toPublishInput(p: { title: string | null; body: string | null; visibility: string; kind: PublicationKind; tags?: string[]; thumbnailUrl?: string | null }, m: { url: string | null; sizeBytes: bigint; mimeType: string; width: number | null; height: number | null; durationSec: number | null }): PublishInput {
   return {
     kind: p.kind,
     title: p.title ?? '',
     description: p.body ?? '',
+    tags: p.tags ?? [],
+    thumbnailUrl: p.thumbnailUrl ?? null,
     visibility: p.visibility === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC',
     media: { url: m.url!, sizeBytes: Number(m.sizeBytes), mimeType: m.mimeType, width: m.width, height: m.height, durationSec: m.durationSec },
   };
@@ -101,6 +96,8 @@ export async function createPublication(input: CreatePublicationInput, registry:
   if (accountIds.length === 0) throw new UserError('Escolha pelo menos uma conta para publicar.');
   const title = input.title.trim();
   const body = input.body.trim();
+  const tags = [...new Set((input.tags ?? []).map((t) => t.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim().replace(/^#+/, '')).filter(Boolean))].slice(0, 20);
+  const thumbnailUrl = input.thumbnailUrl ? assertOwnBlobUrl(input.thumbnailUrl, 'thumbnail').toString() : null;
 
   const media = await prisma.mediaAsset.findFirst({ where: { id: input.mediaAssetId, workspaceId: input.workspaceId } });
   if (!media?.url) throw new UserError('Envie o vídeo antes de publicar.');
@@ -136,7 +133,7 @@ export async function createPublication(input: CreatePublicationInput, registry:
   // 3) regras de cada plataforma (título, tamanhos, duração, formato)
   const errs = new Set<string>();
   for (const plan of plans) {
-    const pi = toPublishInput({ title, body, visibility: input.visibility, kind: plan.kind }, media);
+    const pi = toPublishInput({ title, body, visibility: input.visibility, kind: plan.kind, tags, thumbnailUrl }, media);
     for (const p of new Set(plan.accounts.map((a) => a.platform))) for (const e of publisherFor(registry, p).validate(pi)) errs.add(plan.kind === 'STORY' && !e.includes('story') && !e.includes('Story') ? `Story — ${e}` : e);
   }
   if (errs.size) throw new UserError([...errs].join(' '));
@@ -189,6 +186,8 @@ export async function createPublication(input: CreatePublicationInput, registry:
           groupIds: input.groupIds,
           visibility: input.visibility,
           kind: plan.kind,
+          tags,
+          thumbnailUrl,
           scheduledAt: wanted,
           status: 'SCHEDULED',
           targets: { create: plan.accounts.map((a) => ({ socialAccountId: a.id, kind: plan.kind, status: 'SCHEDULED' as const, scheduledAt: wanted })) },

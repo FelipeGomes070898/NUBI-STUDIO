@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import { Flash, type Search } from '@/components/Flash';
 import { FORMATS, FORMAT_LABEL, PLATFORMS, PLATFORM_ICON, PLATFORM_LABEL } from '@/lib/labels';
 import { getWorkspace } from '@/server/workspace';
-import { deleteGroupAction, saveGroupAction, saveMembersAction } from '../actions';
+import { deleteGroupAction, saveGroupAction, saveMembersAction, setGroupCharacterAction } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +13,7 @@ export default async function GroupPage({ params, searchParams }: { params: Prom
   const ws = await getWorkspace();
   const group = await prisma.accountGroup.findFirst({ where: { id, workspaceId: ws.id }, include: { memberships: true } });
   if (!group) notFound();
+  const characters = await prisma.character.findMany({ where: { workspaceId: ws.id }, orderBy: { name: 'asc' }, select: { id: true, name: true } });
   const [accounts, clients] = await Promise.all([
     prisma.socialAccount.findMany({ where: { workspaceId: ws.id }, orderBy: [{ platform: 'asc' }, { displayName: 'asc' }], include: { memberships: { include: { group: { select: { id: true, name: true } } } } } }),
     prisma.client.findMany({ where: { workspaceId: ws.id }, orderBy: { name: 'asc' } }),
@@ -45,6 +46,23 @@ export default async function GroupPage({ params, searchParams }: { params: Prom
         <div className="row">
           <label className="inline noflex"><input type="checkbox" name="isActive" defaultChecked={group.isActive} /> Grupo ativo</label>
           <button>Salvar configuração</button>
+        </div>
+      </form>
+
+      <form action={setGroupCharacterAction} className="card stack" style={{ marginTop: 14 }}>
+        <input type="hidden" name="entityId" value={group.id} />
+        <div>
+          <h3>Personagem fixo</h3>
+          <p style={{ margin: '4px 0 0' }}>Quando você pedir um vídeo para este grupo no <Link href="/studio">Estúdio</Link>, este personagem entra automaticamente (dá para trocar na hora). Cadastre personagens em <Link href="/characters">Personagens</Link>.</p>
+        </div>
+        <div className="row">
+          <label>Personagem
+            <select name="characterId" defaultValue={group.characterId ?? ''}>
+              <option value="">— nenhum —</option>
+              {characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </label>
+          <button>Salvar personagem</button>
         </div>
       </form>
 

@@ -21,11 +21,11 @@ export async function POST(req: Request) {
     const json = await handleUpload({
       body,
       request: req,
-      onBeforeGenerateToken: async () => ({
-        allowedContentTypes: VIDEO_MIME_TYPES,
-        maximumSizeInBytes: maxVideoBytes(),
-        addRandomSuffix: true, // o endereço público fica impossível de adivinhar
-      }),
+      // clientPayload 'image' = foto do personagem (Estúdio); sem payload = vídeo de publicação
+      onBeforeGenerateToken: async (_pathname, clientPayload) =>
+        clientPayload === 'image'
+          ? { allowedContentTypes: ['image/png', 'image/jpeg', 'image/webp'], maximumSizeInBytes: 8 * 1024 * 1024, addRandomSuffix: true }
+          : { allowedContentTypes: VIDEO_MIME_TYPES, maximumSizeInBytes: maxVideoBytes(), addRandomSuffix: true }, // endereço público impossível de adivinhar
       // O vídeo é registrado pelo formulário (registerMediaAction) com a URL devolvida ao navegador.
       onUploadCompleted: async () => {},
     });

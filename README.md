@@ -25,8 +25,9 @@ Plataforma web para gerenciar **grupos de contas sociais** e um **estúdio de IA
 | **Publicações**: envio do vídeo uma vez e publicação em YouTube, Facebook e TikTok de uma vez (grupo ou contas escolhidas), agora ou agendada, com intervalo mínimo por conta e registro do último post/agendamento | ✅ (precisa do Vercel Blob e do agendador; ver abaixo) |
 | **Instagram** (conta Profissional ligada à Página): conexão pelo login do Facebook; publicação de Reels e Stories | ✅ (usa as chaves `META_*`; precisa das permissões do Instagram no app da Meta) |
 | **Stories** do Facebook e do Instagram, e **Metas da semana** (1 post / 1 story por conta, domingo a domingo, editáveis) | ✅ |
-| Geração de **vídeo** | ⏳ precisa de adapter para o seu gateway (ver `docs/INTEGRATION_CONTRACT.md`) |
-| Anúncios, resposta automática a mensagens/comentários, insights, calendário, FFmpeg | ⏳ / fora do escopo (ver abaixo e `ROADMAP.md`) |
+| **Estúdio de vídeos**: ideia → roteiro em cenas → vídeo (Google Veo) com **personagem fixo por grupo** → montagem na duração exata (FFmpeg) → thumbnail (ChatGPT), título, descrição, tags e hashtags (Claude) → publicar | ✅ (precisa de provedor Google/Veo com preço, Blob e agendador) |
+| **Personagens**: descrição fixa + imagens de referência, fixados por grupo | ✅ |
+| Anúncios, resposta automática a mensagens/comentários, insights, calendário | ⏳ / fora do escopo (ver abaixo e `ROADMAP.md`) |
 
 > Os adapters foram testados contra um **servidor simulado** no padrão OpenAI, não contra um gateway real. Antes de confiar em produção, rode o fluxo com a sua chave real (e um saldo pequeno).
 
@@ -116,3 +117,15 @@ O Instagram é conectado **pelo Facebook**: só funciona com conta **Profissiona
 - Em **Nova publicação** escolha *Post* ou *Story* (story só no Facebook e no Instagram) e, no post, marque *Postar também como story*. A regra de intervalo mínimo vale **por conta e por tipo**: story não bloqueia post.
 - **Metas da semana** (domingo a domingo): por conta e tipo, mostra feito, agendado e o que falta (padrão 1 por semana; editável, 0 desliga) com o atalho *Criar agora*. A contagem é do sistema; o "Plano" do Facebook é calculado pela Meta e pode demorar a refletir, e nada garante que a Meta conte posts feitos por API da mesma forma.
 - **Não automatizado de propósito:** anúncio (gasta dinheiro), taxa de resposta (responder mensagens/comentários só para bater meta é automação que as plataformas penalizam) e "acessar insights" (a Meta conta dentro do app dela).
+
+## Estúdio de vídeos
+**Configuração (Central de IA):**
+1. Provedor **Google Gemini / Veo** (chave do Google AI Studio, com faturamento habilitado para Veo): sincronize os modelos, ative o Veo e informe o **preço por segundo** (sem preço o sistema não gera, para não gastar sem controle).
+2. Um provedor OpenAI-compatível (gateway) com modelo de **texto** (ex.: Claude) e de **imagem** (ex.: gpt-image) ativos e com preço. Em *Modelo por tarefa* escolha: *Criar roteiro* e *Legendas e descrições* → texto; *Gerar imagens* → imagem; *Gerar vídeos* → Veo.
+3. Vercel Blob (guarda clipes, vídeo final e thumbnail) e o agendador (`CRON_SECRET` + secrets do GitHub), como na publicação.
+
+**Uso:** *Personagens* → criar (descrição fixa + até 3 imagens) → na página do **grupo**, escolher o *Personagem fixo* → *Estúdio de vídeos* → escrever a ideia, escolher o grupo (o personagem do grupo entra sozinho; dá para trocar ou tirar), a duração e o formato → o custo máximo é mostrado e o saldo é conferido antes de começar. A tela acompanha sozinha; o agendador também avança em segundo plano.
+
+**Como funciona:** a duração vira clipes de 4/6/8 s (`VEO_ALLOWED_SECONDS`; 10 s = 8 + 4, depois cortado em 10 s exatos). O mesmo bloco de descrição do personagem entra em **todas** as cenas e na thumbnail, e a primeira imagem de referência é enviada ao Veo como imagem inicial; a thumbnail usa as imagens de referência (se o gateway aceitar `/images/edits`; senão, só o texto). O FFmpeg junta e corta o vídeo. A thumbnail é comprimida para caber nos 2 MB do YouTube.
+
+**Limites honestos:** o Veo não garante o mesmo rosto/roupa entre cenas; a descrição fixa + imagem de referência reduzem a variação, não a eliminam. Cada cena usa seu próprio clipe (sem encadear o último quadro). Vídeos longos custam mais (preço/s × segundos) e levam mais tempo; `STUDIO_MAX_SECONDS` limita (padrão 120). Cenas bloqueadas pelo filtro do Google falham sem cobrança e podem ser refeitas.

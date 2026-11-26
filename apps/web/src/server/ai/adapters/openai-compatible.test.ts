@@ -82,4 +82,48 @@ describe('OpenAICompatibleAdapter', () => {
     expect(bad.ok).toBe(false);
     expect(bad.error).toMatch(/URL base/);
   });
+
+  describe('imagem com personagem de referência', () => {
+    const PNG = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const router = (calls: string[], edits: () => Response) => (async (url: string | URL | Request) => {
+      const u = String(url);
+      calls.push(u);
+      if (u.endsWith('/ref.png')) return new Response(PNG, { headers: { 'content-type': 'image/png' } });
+      if (u.endsWith('/ref.txt')) return new Response('x', { headers: { 'content-type': 'text/plain' } });
+      if (u.endsWith('/images/edits')) return edits();
+      if (u.endsWith('/images/generations')) return json({ data: [{ b64_json: 'R0VO' }] });
+      return new Response('{}', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    it('usa /images/edits com as imagens do personagem (multipart)', async () => {
+      const calls: string[] = [];
+      const f = vi.fn(router(calls, () => json({ data: [{ b64_json: 'RURJVA==' }] })));
+      const r = await make(f as unknown as typeof fetch).generateImage({ model: 'gpt-image-1', prompt: 'thumb', imageSize: '1024x1536', referenceImageUrls: ['https://cdn.test/ref.png'] });
+      expect(r.referenceUsed).toBe(true);
+      expect(r.images[0]!.b64).toBe('RURJVA==');
+      expect(calls.some((c) => c.endsWith('/images/generations'))).toBe(false);
+      const editCall = f.mock.calls.find((c) => String(c[0]).endsWith('/images/edits')) as unknown as [string, RequestInit];
+      const form = editCall[1].body as FormData;
+      expect(form.get('model')).toBe('gpt-image-1');
+      expect(form.get('prompt')).toBe('thumb');
+      expect(form.get('size')).toBe('1024x1536');
+      expect((form.getAll('image[]')[0] as File).type).toBe('image/png');
+      expect((editCall[1].headers as Record<string, string>)['Content-Type']).toBeUndefined(); // o fetch define o boundary
+    });
+
+    it('se o gateway não suporta /edits, cai na geração por texto sem falhar', async () => {
+      const calls: string[] = [];
+      const r = await make(router(calls, () => json({ error: { message: 'no' } }, { status: 404 }))).generateImage({ model: 'm', prompt: 'p', referenceImageUrls: ['https://cdn.test/ref.png'] });
+      expect(r.referenceUsed).toBeUndefined();
+      expect(r.images[0]!.b64).toBe('R0VO');
+      expect(calls.filter((c) => c.endsWith('/images/edits'))).toHaveLength(1); // tentou uma vez só (não duplica cobrança)
+    });
+
+    it('referência ilegível ou de tipo errado é ignorada: vai direto para o texto', async () => {
+      const calls: string[] = [];
+      const r = await make(router(calls, () => json({}))).generateImage({ model: 'm', prompt: 'p', referenceImageUrls: ['https://cdn.test/ref.txt', 'https://cdn.test/nao-existe.png'] });
+      expect(r.images[0]!.b64).toBe('R0VO');
+      expect(calls.some((c) => c.endsWith('/images/edits'))).toBe(false);
+    });
+  });
 });

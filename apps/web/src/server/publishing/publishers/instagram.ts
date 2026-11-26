@@ -71,7 +71,7 @@ export function instagramPublisher(deps: InstagramPublisherDeps = {}): Publisher
       const created = await call('POST', `${graph}/${igId}/media`, {
         media_type: story ? 'STORIES' : 'REELS',
         video_url: input.media.url,
-        ...(story ? {} : { caption, share_to_feed: 'true' }),
+        ...(story ? {} : { caption, share_to_feed: 'true', ...(input.thumbnailUrl ? { cover_url: input.thumbnailUrl } : {}) }),
         access_token: token,
       }, auth);
       const creationId = created.id as string | undefined;

@@ -3,6 +3,7 @@ import { run } from '@/lib/action';
 import { bool, oneOf, optStr, str } from '@/lib/form';
 import { FORMATS } from '@/lib/labels';
 import { createGroup, deleteGroup, setGroupMembers, updateGroup } from '@/server/directory';
+import { setGroupCharacter } from '@/server/studio/characters';
 
 export async function createGroupAction(fd: FormData) {
   await run('/groups', async (ws) => {
@@ -42,5 +43,14 @@ export async function deleteGroupAction(fd: FormData) {
   await run('/groups', async (ws) => {
     await deleteGroup(ws, str(fd, 'entityId'));
     return 'Grupo excluído (as contas continuam cadastradas).';
+  });
+}
+
+export async function setGroupCharacterAction(fd: FormData) {
+  const id = str(fd, 'entityId');
+  await run(`/groups/${id}`, async (ws) => {
+    const characterId = str(fd, 'characterId') || null;
+    await setGroupCharacter(ws, id, characterId);
+    return characterId ? 'Personagem fixo definido: ele aparecerá em todos os vídeos deste grupo.' : 'Personagem fixo removido deste grupo.';
   });
 }

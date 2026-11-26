@@ -5,7 +5,11 @@ const UPLOAD_BASE = 'https://www.googleapis.com/upload/youtube/v3';
 export interface YoutubePublisherDeps {
   fetch?: typeof fetch;
   uploadBase?: string;
+  /** Comprime a thumbnail para caber no limite do YouTube (padrão: FFmpeg). */
+  fitImage?: (bytes: Uint8Array, maxBytes: number) => Promise<{ bytes: Uint8Array; mime: string } | null>;
 }
+
+const THUMB_MAX = 2 * 1024 * 1024;
 
 const REASONS: Record<string, string> = {
   quotaExceeded: 'A cota diária da API do YouTube acabou. Tente amanhã ou peça aumento de cota ao Google.',
@@ -21,6 +25,24 @@ export function youtubePublisher(deps: YoutubePublisherDeps = {}): Publisher {
   const f = deps.fetch ?? fetch;
   const base = deps.uploadBase ?? UPLOAD_BASE;
 
+  /** Melhor esforço: a thumbnail personalizada exige canal verificado; falha vira aviso, não erro. */
+  async function setThumbnail(videoId: string, thumbUrl: string, token: string): Promise<string | null> {
+    try {
+      const img = await f(thumbUrl, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
+      if (!img.ok) return `A thumbnail não foi aplicada (não foi possível ler a imagem, HTTP ${img.status}).`;
+      const fit = await (deps.fitImage ?? (await import('../../studio/render')).fitImage)(new Uint8Array(await img.arrayBuffer()), THUMB_MAX);
+      if (!fit) return 'A thumbnail não foi aplicada (não coube nos 2 MB do YouTube).';
+      const res = await f(`${base}/thumbnails/set?videoId=${encodeURIComponent(videoId)}&uploadType=media`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': fit.mime, 'Content-Length': String(fit.bytes.length) }, body: fit.bytes as unknown as BodyInit,
+        signal: AbortSignal.timeout(60_000), redirect: 'error',
+      });
+      if (res.ok) return null;
+      return res.status === 403 ? 'A thumbnail personalizada não foi aplicada: o canal precisa estar verificado no YouTube.' : `A thumbnail não foi aplicada (HTTP ${res.status}).`;
+    } catch (e) {
+      return `A thumbnail não foi aplicada (${(e as Error).message}).`;
+    }
+  }
+
   return {
     platform: 'YOUTUBE',
 
@@ -31,6 +53,7 @@ export function youtubePublisher(deps: YoutubePublisherDeps = {}): Publisher {
       if (input.title.length > 100) errs.push('YouTube: o título passa de 100 caracteres.');
       if (/[<>]/.test(input.title + input.description)) errs.push('YouTube: título e descrição não aceitam os caracteres < e >.');
       if (Buffer.byteLength(input.description, 'utf8') > 5000) errs.push('YouTube: a descrição passa de 5000 bytes.');
+      if (input.tags.join(',').length > 500) errs.push('YouTube: as tags passam de 500 caracteres.');
       if (!VIDEO_MIME_TYPES.includes(input.media.mimeType)) errs.push('YouTube: formato de vídeo não aceito (use MP4, MOV ou WebM).');
       return errs;
     },
@@ -49,7 +72,7 @@ export function youtubePublisher(deps: YoutubePublisherDeps = {}): Publisher {
           'X-Upload-Content-Type': media.mimeType,
         },
         body: JSON.stringify({
-          snippet: { title: input.title.trim(), description: input.description, categoryId: '22' },
+          snippet: { title: input.title.trim(), description: input.description, categoryId: '22', ...(input.tags.length ? { tags: input.tags } : {}) },
           status: { privacyStatus: privacy, selfDeclaredMadeForKids: false },
         }),
         signal: AbortSignal.timeout(30_000),
@@ -77,11 +100,15 @@ export function youtubePublisher(deps: YoutubePublisherDeps = {}): Publisher {
       const j = (await put.json().catch(() => null)) as { id?: string; status?: { privacyStatus?: string } } | null;
       if (!j?.id) throw new PublishError('O YouTube não confirmou o envio do vídeo.');
 
-      const note =
-        privacy === 'public' && j.status?.privacyStatus && j.status.privacyStatus !== 'public'
-          ? `O YouTube deixou o vídeo como "${j.status.privacyStatus}". Projetos de API ainda sem auditoria do Google ficam privados.`
-          : undefined;
-      return { platformPostId: j.id, url: `https://www.youtube.com/watch?v=${j.id}`, note };
+      const notes: string[] = [];
+      if (privacy === 'public' && j.status?.privacyStatus && j.status.privacyStatus !== 'public') {
+        notes.push(`O YouTube deixou o vídeo como "${j.status.privacyStatus}". Projetos de API ainda sem auditoria do Google ficam privados.`);
+      }
+      if (input.thumbnailUrl) {
+        const t = await setThumbnail(j.id, input.thumbnailUrl, token);
+        if (t) notes.push(t);
+      }
+      return { platformPostId: j.id, url: `https://www.youtube.com/watch?v=${j.id}`, note: notes.join(' ') || undefined };
     },
   };
 }

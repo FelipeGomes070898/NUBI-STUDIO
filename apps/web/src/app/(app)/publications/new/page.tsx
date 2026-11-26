@@ -1,6 +1,8 @@
 import { prisma } from '@social-manager/db';
 import { FORMAT_LABEL } from '@/lib/labels';
 import { listGroups } from '@/server/directory';
+import { isOwnBlobUrl } from '@/server/blobUrl';
+import { captionWithHashtags } from '@/server/studio/prompts';
 import { maxVideoBytes, getAccountActivity } from '@/server/publishing/service';
 import { minGapMinutes } from '@/server/publishing/schedule';
 import { DEFAULT_TIMEZONE } from '@/server/publishing/time';
@@ -13,7 +15,7 @@ export const maxDuration = 300;
 
 const SUPPORTED = ['YOUTUBE', 'FACEBOOK', 'INSTAGRAM', 'TIKTOK'];
 
-export default async function NewPublicationPage({ searchParams }: { searchParams: Promise<{ kind?: string; accounts?: string }> }) {
+export default async function NewPublicationPage({ searchParams }: { searchParams: Promise<{ kind?: string; accounts?: string; project?: string }> }) {
   const q = await searchParams;
   const ws = await getWorkspace();
   const [accounts, groups, activity] = await Promise.all([
@@ -21,6 +23,23 @@ export default async function NewPublicationPage({ searchParams }: { searchParam
     listGroups(ws.id),
     getAccountActivity(ws.id),
   ]);
+
+  // Vindo do Estúdio: o vídeo já está enviado e os textos prontos
+  const project = q.project
+    ? await prisma.videoProject.findFirst({ where: { id: q.project, workspaceId: ws.id, status: 'READY' } })
+    : null;
+  const projectMedia = project?.finalMediaId ? await prisma.mediaAsset.findFirst({ where: { id: project.finalMediaId, workspaceId: ws.id } }) : null;
+  const fromStudio = project && projectMedia?.url
+    ? {
+        media: { id: projectMedia.id, name: projectMedia.name, sizeMb: Math.round((Number(projectMedia.sizeBytes) / 1024 / 1024) * 10) / 10, format: projectMedia.format, width: projectMedia.width ?? 0, height: projectMedia.height ?? 0, duration: projectMedia.durationSec ?? 0 },
+        title: project.selectedTitle ?? '',
+        body: captionWithHashtags(project.description ?? '', project.hashtags),
+        tags: project.tags,
+        thumbnailUrl: project.thumbUrl && isOwnBlobUrl(project.thumbUrl) ? project.thumbUrl : null,
+        thumbnailPreview: project.thumbUrl,
+        groupId: project.groupId,
+      }
+    : null;
 
   const formAccounts: FormAccount[] = accounts.map((a) => {
     const act = activity.get(a.id);
@@ -45,7 +64,7 @@ export default async function NewPublicationPage({ searchParams }: { searchParam
       <div className="pageHead">
         <div>
           <h1>Nova publicação</h1>
-          <p>Envie o vídeo uma vez e publique em todas as contas do grupo, agora ou em data e hora marcadas. Você pode desmarcar contas antes de enviar.</p>
+          <p>Envie o vídeo uma vez (ou use um vídeo pronto do Estúdio) e publique em todas as contas do grupo, agora ou em data e hora marcadas. Você pode desmarcar contas antes de enviar.</p>
         </div>
       </div>
       <PublishForm
@@ -57,6 +76,8 @@ export default async function NewPublicationPage({ searchParams }: { searchParam
         defaultTz={DEFAULT_TIMEZONE}
         initialKind={q.kind === 'STORY' ? 'STORY' : 'POST'}
         initialAccountIds={(q.accounts ?? '').split(',').filter((id) => formAccounts.some((a) => a.id === id && a.usable))}
+        fromStudio={fromStudio}
+        notice={q.project && !fromStudio ? 'Este vídeo do Estúdio não está pronto para publicar (confira se terminou e se o Vercel Blob está conectado).' : undefined}
       />
     </>
   );

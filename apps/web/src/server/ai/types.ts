@@ -37,6 +37,11 @@ export interface GenerationParams {
   imageSize?: string;
   durationSec?: number;
   voice?: string;
+  /** Proporção do vídeo/imagem ("9:16", "16:9"). */
+  aspectRatio?: string;
+  negativePrompt?: string;
+  /** Imagens de referência (URLs públicas): personagem fixo no vídeo e na thumbnail. */
+  referenceImageUrls?: string[];
 }
 
 export interface DiscoveredModel {
@@ -58,6 +63,8 @@ export interface TextResult {
 
 export interface ImageResult {
   images: Array<{ b64?: string; url?: string }>;
+  /** true quando as imagens de referência (personagem) foram realmente usadas pelo modelo. */
+  referenceUsed?: boolean;
   reportedCost?: number;
   requestId?: string;
 }
@@ -76,6 +83,22 @@ export interface AIProviderAdapter {
   generateText(req: { model: string; prompt: string } & GenerationParams): Promise<TextResult>;
   generateImage(req: { model: string; prompt: string } & GenerationParams): Promise<ImageResult>;
   generateSpeech(req: { model: string; input: string; voice?: string }): Promise<AudioResult>;
+  /** Vídeo é assíncrono: submitVideo devolve um id de operação; pollVideo consulta; downloadVideo baixa o arquivo. */
+  submitVideo?(req: { model: string; prompt: string } & GenerationParams): Promise<VideoSubmitResult>;
+  pollVideo?(operationId: string): Promise<VideoPollResult>;
+  downloadVideo?(videoRef: string): Promise<Uint8Array>;
+}
+
+export interface VideoSubmitResult {
+  operationId: string;
+}
+
+export interface VideoPollResult {
+  done: boolean;
+  /** Referência do arquivo pronto (entregue a downloadVideo). */
+  videoRef?: string;
+  /** Motivo da falha (mensagem já segura para mostrar). */
+  error?: string;
 }
 
 /** Erro do provedor com mensagem já sanitizada (sem chave, sem corpo bruto longo). */

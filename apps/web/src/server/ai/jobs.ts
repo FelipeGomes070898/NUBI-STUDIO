@@ -4,13 +4,15 @@ import { checkBudget } from '../billing/budget';
 import { dec, lockWallet, postLedger, readSpend } from '../billing/wallet';
 import { decryptSecret } from '../crypto';
 import { UserError } from '../errors';
-import { mediaStore } from '../storage';
+import { storeOutput } from '../outputs';
 import { createAdapter, isSupported } from './adapters';
 import { computeTextCost, maxOutputTokens, parsePricing, usd } from './pricing';
 import { planRoute, RoutingError, type RouteEntry } from './routing';
 import { ProviderError, TASK_MODALITY, type GenerationParams } from './types';
 
 const STALE_AFTER_MS = 15 * 60 * 1000;
+/** Vídeo (Veo) leva minutos e é consultado em outro momento: tolera bem mais antes de ser dado como perdido. */
+const STALE_VIDEO_AFTER_MS = 45 * 60 * 1000;
 const MAX_PROMPT_CHARS = 20_000;
 
 export interface SubmitInput {
@@ -26,14 +28,14 @@ export interface SubmitInput {
 
 /** Jobs que ficaram QUEUED/RUNNING (processo caiu) soltam a reserva depois de 15 min. */
 export async function reapStaleJobs(workspaceId: string) {
+  const data = { status: 'FAILED' as const, reservedAmount: 0, completedAt: new Date() };
   await prisma.aIJob.updateMany({
-    where: { workspaceId, status: { in: ['QUEUED', 'RUNNING'] }, createdAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } },
-    data: {
-      status: 'FAILED',
-      reservedAmount: 0,
-      completedAt: new Date(),
-      errorMessage: 'Interrompido: sem resposta por mais de 15 minutos. Confira no painel do provedor se houve cobrança.',
-    },
+    where: { workspaceId, modality: { not: 'VIDEO' }, status: { in: ['QUEUED', 'RUNNING'] }, createdAt: { lt: new Date(Date.now() - STALE_AFTER_MS) } },
+    data: { ...data, errorMessage: 'Interrompido: sem resposta por mais de 15 minutos. Confira no painel do provedor se houve cobrança.' },
+  });
+  await prisma.aIJob.updateMany({
+    where: { workspaceId, modality: 'VIDEO', status: { in: ['QUEUED', 'RUNNING'] }, createdAt: { lt: new Date(Date.now() - STALE_VIDEO_AFTER_MS) } },
+    data: { ...data, errorMessage: 'O vídeo não ficou pronto em 45 minutos. Confira no painel do provedor se houve cobrança.' },
   });
 }
 
@@ -154,11 +156,7 @@ export async function executeAIJob(jobId: string): Promise<void> {
         const img = r.images[0]!;
         out.providerRequestId = r.requestId;
         if (img.b64) {
-          const key = `ai/${job.workspaceId}/${job.id}.png`;
-          if (await saveOutput(key, Buffer.from(img.b64, 'base64'), out)) {
-            out.outputStorageKey = key;
-            out.outputMimeType = 'image/png';
-          }
+          await saveOutput(`ai/${job.workspaceId}/${job.id}.png`, Buffer.from(img.b64, 'base64'), 'image/png', out);
         } else {
           out.outputUrl = img.url;
         }
@@ -167,17 +165,18 @@ export async function executeAIJob(jobId: string): Promise<void> {
       }
       case 'AUDIO': {
         const r = await adapter.generateSpeech({ model: job.providerModelId, input: job.prompt, voice: params.voice });
-        const key = `ai/${job.workspaceId}/${job.id}.mp3`;
-        if (await saveOutput(key, r.audio, out)) {
-          out.outputStorageKey = key;
-          out.outputMimeType = r.mimeType;
-        }
+        await saveOutput(`ai/${job.workspaceId}/${job.id}.mp3`, r.audio, r.mimeType, out);
         out.providerRequestId = r.requestId;
         actual = estimate ? { cost: estimate, source: 'COMPUTED' } : null;
         break;
       }
-      case 'VIDEO':
-        throw new ProviderError('Geração de vídeo ainda não tem adapter para este provedor.');
+      case 'VIDEO': {
+        if (!adapter.submitVideo) throw new ProviderError('Este provedor não gera vídeo. Use um provedor do tipo Google Gemini (Veo).');
+        const op = await adapter.submitVideo({ model: job.providerModelId, prompt: job.prompt, ...params });
+        // Vídeo é assíncrono: o job continua RUNNING (com o valor reservado) até pollVideoJob concluir.
+        await prisma.aIJob.update({ where: { id: job.id }, data: { providerRequestId: op.operationId } });
+        return;
+      }
     }
 
     await settle(job, { status: 'SUCCEEDED', data: out, actual });
@@ -192,9 +191,12 @@ export async function executeAIJob(jobId: string): Promise<void> {
  * Salva a saída gerada. Se o storage falhar DEPOIS de o provedor ter cobrado, o job continua como
  * concluído (o custo é debitado) e o problema fica registrado, em vez de perder o débito.
  */
-async function saveOutput(key: string, data: Uint8Array, out: Partial<Prisma.AIJobUpdateInput>): Promise<boolean> {
+async function saveOutput(key: string, data: Uint8Array, mime: string, out: Partial<Prisma.AIJobUpdateInput>): Promise<boolean> {
   try {
-    await mediaStore.put(key, data);
+    const stored = await storeOutput({ key, bytes: data, mime });
+    out.outputMimeType = mime;
+    if (stored.url) out.outputUrl = stored.url;
+    if (stored.storageKey) out.outputStorageKey = stored.storageKey;
     return true;
   } catch (e) {
     console.error('[ai-job] falha ao salvar saída', key, e);
@@ -235,6 +237,45 @@ async function settle(
       });
     }
   });
+}
+
+/**
+ * Consulta um job de vídeo em andamento. Quando o provedor termina: baixa o arquivo, guarda, confirma o custo
+ * (preço por segundo × duração, informado no cadastro do modelo) e libera a reserva. Falha do provedor libera a reserva sem débito.
+ * Erros transitórios de consulta/download mantêm o job RUNNING para tentar de novo.
+ */
+export async function pollVideoJob(jobId: string): Promise<'RUNNING' | 'SUCCEEDED' | 'FAILED'> {
+  const job = await prisma.aIJob.findUniqueOrThrow({ where: { id: jobId }, include: { provider: true, model: true } });
+  if (job.status === 'SUCCEEDED' || job.status === 'FAILED' || job.status === 'CANCELLED') return job.status === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED';
+  if (job.modality !== 'VIDEO' || !job.providerRequestId) return 'RUNNING'; // ainda sendo enviado
+
+  const fail = async (message: string) => {
+    await settle(job, { status: 'FAILED', data: { errorMessage: message.slice(0, 1000) }, actual: null });
+    return 'FAILED' as const;
+  };
+  try {
+    const adapter = createAdapter(job.provider.adapter, { baseUrl: job.provider.baseUrl, apiKey: decryptSecret(job.provider.secretCiphertext) });
+    if (!adapter.pollVideo || !adapter.downloadVideo) return await fail('Este provedor não consulta vídeos.');
+    const st = await adapter.pollVideo(job.providerRequestId);
+    if (!st.done) return 'RUNNING';
+    if (st.error || !st.videoRef) return await fail(st.error ?? 'O provedor não devolveu o vídeo.');
+
+    const bytes = await adapter.downloadVideo(st.videoRef);
+    const out: Partial<Prisma.AIJobUpdateInput> = { errorMessage: null };
+    if (!(await saveOutput(`ai/${job.workspaceId}/${job.id}.mp4`, bytes, 'video/mp4', out)) || (!out.outputUrl && !out.outputStorageKey)) {
+      return await fail('O vídeo foi gerado e cobrado pelo provedor, mas não pôde ser salvo (storage indisponível).');
+    }
+    const estimate = job.estimatedCost ? dec(job.estimatedCost) : null;
+    await settle(job, { status: 'SUCCEEDED', data: out, actual: estimate ? { cost: estimate, source: 'COMPUTED' } : null });
+    return 'SUCCEEDED';
+  } catch (e) {
+    const known = e instanceof ProviderError || e instanceof UserError;
+    if (!known) console.error('[ai-video-poll]', job.id, e);
+    if (Date.now() - job.createdAt.getTime() > STALE_VIDEO_AFTER_MS) return await fail('O vídeo não ficou pronto em 45 minutos.');
+    // transitório: mantém RUNNING; deixa o motivo visível sem encerrar
+    await prisma.aIJob.update({ where: { id: job.id }, data: { errorMessage: (known ? (e as Error).message : 'Falha temporária ao consultar o vídeo.').slice(0, 500) } });
+    return 'RUNNING';
+  }
 }
 
 /** Submete e executa em sequência (modalidades curtas: texto/imagem/áudio). */

@@ -13,7 +13,7 @@ const TASKS: AITask[] = ['SCRIPT', 'SCRIPT_REVISION', 'CAPTION', 'IMAGE', 'VIDEO
 
 export async function createProviderAction(fd: FormData) {
   await run('/ai', async (ws) => {
-    await createProvider({ workspaceId: ws, name: str(fd, 'name'), kind: oneOf(fd, 'kind', ['UNIFIED', 'DIRECT'] as const, 'Tipo'), baseUrl: str(fd, 'baseUrl'), apiKey: str(fd, 'apiKey') });
+    await createProvider({ workspaceId: ws, name: str(fd, 'name'), kind: oneOf(fd, 'kind', ['UNIFIED', 'DIRECT'] as const, 'Tipo'), adapter: oneOf(fd, 'adapter', ['OPENAI_COMPATIBLE', 'GOOGLE_GEMINI'] as const, 'Protocolo'), baseUrl: str(fd, 'baseUrl'), apiKey: str(fd, 'apiKey') });
     return 'Provedor cadastrado. Teste a conexão e sincronize os modelos.';
   });
 }

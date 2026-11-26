@@ -35,23 +35,38 @@ function readMeta(file: File): Promise<{ width: number; height: number; duration
 
 const orientation = (w: number, h: number) => (!w || !h ? 'FLEXIBLE' : w === h ? 'SQUARE_1_1' : h > w ? 'VERTICAL_9_16' : 'HORIZONTAL_16_9');
 
-export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, defaultTz, initialKind, initialAccountIds }: {
+export interface FromStudio {
+  media: Uploaded;
+  title: string;
+  body: string;
+  tags: string[];
+  thumbnailUrl: string | null;
+  thumbnailPreview: string | null;
+  groupId: string | null;
+}
+
+export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, defaultTz, initialKind, initialAccountIds, fromStudio, notice }: {
   accounts: FormAccount[]; groups: FormGroup[]; blobReady: boolean; maxMb: number; gapMinutes: number; defaultTz: string;
-  initialKind: 'POST' | 'STORY'; initialAccountIds: string[];
+  initialKind: 'POST' | 'STORY'; initialAccountIds: string[]; fromStudio?: FromStudio | null; notice?: string;
 }) {
   const [state, formAction, pending] = useActionState<PublishState, FormData>(publishAction, {});
-  const [media, setMedia] = useState<Uploaded | null>(null);
+  const [media, setMedia] = useState<Uploaded | null>(fromStudio?.media ?? null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [selGroups, setSelGroups] = useState<Set<string>>(new Set());
-  const [selAccounts, setSelAccounts] = useState<Set<string>>(new Set(initialAccountIds));
+  const [selGroups, setSelGroups] = useState<Set<string>>(new Set(fromStudio?.groupId ? [fromStudio.groupId] : []));
+  const [selAccounts, setSelAccounts] = useState<Set<string>>(() => {
+    const ids = new Set(initialAccountIds);
+    const g = groups.find((x) => x.id === fromStudio?.groupId);
+    if (g && ids.size === 0) for (const id of g.accountIds) if (accounts.find((a) => a.id === id)?.usable) ids.add(id);
+    return ids;
+  });
   const [kind, setKind] = useState<'POST' | 'STORY'>(initialKind);
   const [alsoStory, setAlsoStory] = useState(false);
   const [mode, setMode] = useState<'NOW' | 'SCHEDULE'>('NOW');
   // Campos controlados: o React 19 limpa campos não controlados depois de cada ação, e o usuário perderia o texto ao errar.
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
+  const [title, setTitle] = useState(fromStudio?.title ?? '');
+  const [body, setBody] = useState(fromStudio?.body ?? '');
   const [visibility, setVisibility] = useState('PUBLIC');
   const [when, setWhen] = useState('');
   const [ignoreGap, setIgnoreGap] = useState(false);
@@ -130,20 +145,32 @@ export function PublishForm({ accounts, groups, blobReady, maxMb, gapMinutes, de
       <input type="hidden" name="mediaId" value={media?.id ?? ''} />
       <input type="hidden" name="timezone" value={tz} />
       <input type="hidden" name="kind" value={kind} />
+      {(fromStudio?.tags ?? []).map((t) => <input key={t} type="hidden" name="tags" value={t} />)}
+      {fromStudio?.thumbnailUrl && <input type="hidden" name="thumbnailUrl" value={fromStudio.thumbnailUrl} />}
       {[...selGroups].map((id) => <input key={id} type="hidden" name="groupIds" value={id} />)}
       {[...selAccounts].map((id) => <input key={id} type="hidden" name="accountIds" value={id} />)}
 
       {state.error && <div className="flash flashErr" role="alert">{state.error}</div>}
+      {notice && <div className="flash flashErr" role="alert">{notice}</div>}
 
       <section className="card stack">
         <h3>1. Vídeo</h3>
-        {!blobReady ? (
+        {fromStudio && (
+          <div className="row" style={{ alignItems: 'center' }}>
+            {fromStudio.thumbnailPreview && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={fromStudio.thumbnailPreview} alt="Thumbnail" className="noflex" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 10 }} />
+            )}
+            <small>Vídeo do Estúdio. Título, legenda, hashtags{fromStudio.tags.length ? ` e ${fromStudio.tags.length} tag(s) (YouTube)` : ''} já preenchidos{fromStudio.thumbnailUrl ? '; a thumbnail vai como capa no YouTube e no Instagram (Reels)' : fromStudio.thumbnailPreview ? '; a thumbnail só pode ser usada com o Vercel Blob conectado' : ''}.</small>
+          </div>
+        )}
+        {!blobReady && !fromStudio ? (
           <div className="flash flashErr">O armazenamento de vídeo ainda não está configurado (falta conectar o Vercel Blob ao projeto e fazer um novo deploy).</div>
         ) : (
           <>
-            <label>Arquivo (MP4, MOV ou WebM, até {maxMb} MB)
+            {!fromStudio && <label>Arquivo (MP4, MOV ou WebM, até {maxMb} MB)
               <input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" disabled={uploading} onChange={(e) => onFile(e.target.files?.[0])} />
-            </label>
+            </label>}
             {uploading && <div><div className="bar"><i style={{ width: `${progress}%` }} /></div><small>Enviando… {progress}% (não feche a página)</small></div>}
             {uploadError && <div className="flash flashErr" role="alert">{uploadError}</div>}
             {media && (

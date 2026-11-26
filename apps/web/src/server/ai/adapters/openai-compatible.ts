@@ -99,13 +99,51 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
     };
   }
 
+  /** Baixa até 3 imagens de referência (personagem). Qualquer falha devolve [] e a geração segue só com o texto. */
+  private async loadReferences(urls: string[] | undefined): Promise<Array<{ blob: Blob; name: string }>> {
+    const out: Array<{ blob: Blob; name: string }> = [];
+    for (const u of (urls ?? []).slice(0, 3)) {
+      try {
+        const r = await this.f(u, { signal: AbortSignal.timeout(30_000), redirect: 'error' });
+        const mime = (r.headers.get('content-type') ?? '').split(';')[0]!.trim();
+        if (!r.ok || !['image/png', 'image/jpeg', 'image/webp'].includes(mime)) continue;
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        if (bytes.byteLength > 8 * 1024 * 1024) continue;
+        out.push({ blob: new Blob([bytes], { type: mime }), name: `ref${out.length}.${mime.split('/')[1] === 'jpeg' ? 'jpg' : mime.split('/')[1]}` });
+      } catch { /* sem referência */ }
+    }
+    return out;
+  }
+
   async generateImage(req: { model: string; prompt: string } & GenerationParams): Promise<ImageResult> {
+    // Com personagem: tenta /images/edits (a imagem de referência guia o resultado). Se o gateway não suportar, cai no texto.
+    const refs = await this.loadReferences(req.referenceImageUrls);
+    if (refs.length) {
+      try {
+        const form = new FormData();
+        form.set('model', req.model);
+        form.set('prompt', req.prompt);
+        form.set('n', String(req.imageCount ?? 1));
+        if (req.imageSize) form.set('size', req.imageSize);
+        for (const r of refs) form.append('image[]', r.blob, r.name);
+        const res = await this.request('POST', '/images/edits', undefined, { retries: 0, form });
+        const parsed = await this.parseImages(res);
+        return { ...parsed, referenceUsed: true };
+      } catch (e) {
+        // 4xx/5xx do /edits: segue só com o texto (a descrição do personagem já está no prompt)
+        if (!(e instanceof ProviderError)) throw e;
+      }
+    }
     const res = await this.request('POST', '/images/generations', {
       model: req.model,
       prompt: req.prompt,
       n: req.imageCount ?? 1,
       ...(req.imageSize ? { size: req.imageSize } : {}),
     });
+    return this.parseImages(res);
+  }
+
+  private async parseImages(res: Response): Promise<ImageResult> {
     const j = (await res.json().catch(() => null)) as any;
     const items: Array<Record<string, unknown>> = Array.isArray(j?.data) ? j.data : [];
     const images = items
@@ -114,7 +152,7 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
         url: typeof i.url === 'string' ? i.url : undefined,
       }))
       .filter((i) => i.b64 || i.url);
-    if (images.length === 0) throw new ProviderError('Resposta de /images/generations sem imagens.');
+    if (images.length === 0) throw new ProviderError('Resposta de imagens sem resultado.');
     return { images, requestId: res.headers.get('x-request-id') ?? undefined };
   }
 
@@ -136,7 +174,7 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
-    opts: { retries?: number; timeoutMs?: number } = {},
+    opts: { retries?: number; timeoutMs?: number; form?: FormData } = {},
   ): Promise<Response> {
     const retries = opts.retries ?? this.retries;
     const timeout = opts.timeoutMs ?? this.timeoutMs;
@@ -153,7 +191,7 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
             Accept: 'application/json, audio/*',
             ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
           },
-          body: body !== undefined ? JSON.stringify(body) : undefined,
+          body: opts.form ?? (body !== undefined ? JSON.stringify(body) : undefined),
           signal: AbortSignal.timeout(timeout),
           redirect: 'error', // nunca seguir redirect carregando a chave para outro host
         });

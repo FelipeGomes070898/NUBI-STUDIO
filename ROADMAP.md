@@ -10,10 +10,10 @@
 6. Conexão do TikTok por login, com renovação (refresh token girado) e desconexão com revogação.
 7. Publicação multi-rede: upload direto, grupo/contas, agora ou agendada, intervalo mínimo por conta, agendador e andamento por rede.
 8. Instagram (Reels e Stories), Stories do Facebook e Metas da semana por conta e tipo.
+9. Estúdio de vídeos: personagem fixo por grupo, roteiro em cenas, Google Veo, montagem com FFmpeg, thumbnail/título/descrição/tags/hashtags e publicação direta.
 
 ## Próximo
-4. **Vídeo via gateway**: adapter assíncrono para o gateway escolhido (submit → poll → download) + fila BullMQ.
-5. **Estúdio**: upload de mídia, biblioteca, preview, FFmpeg, presets 9:16 e 16:9 (versões por formato de grupo).
+5. **Estúdio (próximos passos)**: continuidade entre cenas (último quadro → primeira imagem da próxima), narração com voz, biblioteca de mídia, versões por formato.
 6. **Publicação (resto)**: versões por formato de grupo (9:16 e 16:9), calendário e títulos/legendas por rede.
 7. **Integrações sociais**: upload para o YouTube (resumable) Facebook Reels e tratamento de auditoria do TikTok/YouTube, com as permissões aprovadas.
 8. Operação: agendamento e publicação automática, notificações, analytics, relatórios, auditoria, RBAC e múltiplos usuários.

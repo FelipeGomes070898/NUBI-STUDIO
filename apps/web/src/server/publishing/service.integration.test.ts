@@ -243,6 +243,19 @@ d('publicação (Postgres real)', () => {
     });
   });
 
+  describe('tags e thumbnail', () => {
+    it('são limpas, guardadas na publicação e entregues ao publicador; thumbnail de fora do sistema é recusada', async () => {
+      const thumb = 'https://abc123.public.blob.vercel-storage.com/studio/thumb-xyz.png';
+      const r = await create({ accountIds: [accs.yt], tags: ['#corrida', 'corrida', ' parque <b> ', ''], thumbnailUrl: thumb });
+      const pub = await db.prisma.publication.findUniqueOrThrow({ where: { id: r.publicationId } });
+      expect(pub.tags).toEqual(['corrida', 'parque b']);
+      expect(pub.thumbnailUrl).toBe(thumb);
+      await run({ publicationId: r.publicationId });
+      expect(calls[0]!.input).toMatchObject({ tags: ['corrida', 'parque b'], thumbnailUrl: thumb });
+      await expect(create({ accountIds: [accs.tt], thumbnailUrl: 'https://evil.com/x.png' })).rejects.toThrow(/enviada?\s+pelo próprio sistema|enviado pelo próprio sistema/);
+    });
+  });
+
   describe('story e Instagram', () => {
     const at = (h: number) => new Date(Date.now() + h * HOUR);
 

@@ -1,4 +1,4 @@
-import { prisma, Prisma, type AIModality, type AIProviderKind, type AITask, type SelectionMode } from '@social-manager/db';
+import { prisma, Prisma, type AIAdapterType, type AIModality, type AIProviderKind, type AITask, type SelectionMode } from '@social-manager/db';
 import { decryptSecret, encryptSecret, secretHint } from '../crypto';
 import { UserError } from '../errors';
 import { createAdapter } from './adapters';
@@ -24,13 +24,15 @@ export async function createProvider(input: {
   workspaceId: string;
   name: string;
   kind: AIProviderKind;
+  adapter?: AIAdapterType;
   baseUrl: string;
   apiKey: string;
 }) {
   const name = input.name.trim();
   if (!name) throw new UserError('Informe um nome para o provedor.');
   if (input.apiKey.trim().length < 8) throw new UserError('Chave de API inválida.');
-  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const adapter = input.adapter ?? 'OPENAI_COMPATIBLE';
+  const baseUrl = normalizeBaseUrl(input.baseUrl.trim() || (adapter === 'GOOGLE_GEMINI' ? 'https://generativelanguage.googleapis.com' : ''));
   const apiKey = input.apiKey.trim();
 
   return prisma.$transaction(async (tx) => {
@@ -41,6 +43,7 @@ export async function createProvider(input: {
           workspaceId: input.workspaceId,
           name,
           kind: input.kind,
+          adapter,
           baseUrl,
           secretCiphertext: encryptSecret(apiKey),
           secretHint: secretHint(apiKey),

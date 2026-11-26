@@ -55,6 +55,25 @@ enum AIProviderKind {
 /// Protocolo falado pelo provedor. Novos adapters entram aqui.
 enum AIAdapterType {
   OPENAI_COMPATIBLE
+  /// API do Google (Gemini/Veo): texto e vídeo assíncrono.
+  GOOGLE_GEMINI
+}
+
+enum VideoProjectStatus {
+  QUEUED
+  PLANNING
+  GENERATING
+  RENDERING
+  READY
+  FAILED
+  CANCELLED
+}
+
+enum SceneStatus {
+  PENDING
+  SUBMITTED
+  DONE
+  FAILED
 }
 
 enum AIModality {
@@ -123,6 +142,8 @@ model Workspace {
   ledger       UsageLedger[]
   media        MediaAsset[]
   publications Publication[]
+  characters   Character[]
+  videoProjects VideoProject[]
 }
 
 model Member {
@@ -176,6 +197,8 @@ model AccountGroup {
   id            String      @id @default(cuid())
   workspaceId   String
   clientId      String?
+  /// Personagem fixo: aparece em todos os vídeos criados para este grupo.
+  characterId   String?
   name          String
   description   String?
   defaultFormat VideoFormat @default(FLEXIBLE)
@@ -184,7 +207,9 @@ model AccountGroup {
 
   workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   client      Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  character   Character?        @relation(fields: [characterId], references: [id], onDelete: SetNull)
   memberships GroupMembership[]
+  projects    VideoProject[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
@@ -269,6 +294,9 @@ model Publication {
   /// PUBLIC | PRIVATE
   visibility   String     @default("PUBLIC")
   kind         PublicationKind @default(POST)
+  /// Tags (YouTube) e capa/thumbnail (YouTube e Instagram), vindas do Estúdio de vídeos.
+  tags         String[]   @default([])
+  thumbnailUrl String?
   scheduledAt  DateTime?
   status       PostStatus @default(DRAFT)
   createdAt    DateTime   @default(now())
@@ -470,4 +498,78 @@ model WeeklyGoal {
 
   @@unique([socialAccountId, kind])
   @@index([workspaceId])
+}
+
+// ───────────────────────── Estúdio de vídeos ─────────────────────────
+
+/// Personagem fixo de uma marca/grupo: descrição + imagens de referência (URLs públicas não listadas).
+model Character {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  name          String
+  /// Aparência, roupa, estilo, personalidade: entra em TODOS os prompts de cena e de thumbnail.
+  description   String   @db.Text
+  referenceUrls String[]
+  createdAt     DateTime @default(now())
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  groups    AccountGroup[]
+  projects  VideoProject[]
+
+  @@unique([workspaceId, name])
+}
+
+model VideoProject {
+  id             String             @id @default(cuid())
+  workspaceId    String
+  groupId        String?
+  characterId    String?
+  prompt         String             @db.Text
+  targetSeconds  Int
+  /// "9:16" ou "16:9"
+  aspect         String
+  status         VideoProjectStatus @default(QUEUED)
+  /// Texto curto do passo atual, para a tela.
+  step           String?
+  error          String?
+  titles         String[]           @default([])
+  selectedTitle  String?
+  description    String?            @db.Text
+  tags           String[]           @default([])
+  hashtags       String[]           @default([])
+  thumbUrl       String?
+  thumbJobId     String?
+  thumbError     String?
+  finalUrl       String?
+  finalMediaId   String?
+  estimatedCost  Decimal?           @db.Decimal(14, 6)
+  /// Trava de execução: quem avança o projeto (cron ou navegador) reserva por alguns minutos.
+  lockedUntil    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  group     AccountGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  character Character?    @relation(fields: [characterId], references: [id], onDelete: SetNull)
+  scenes    VideoScene[]
+
+  @@index([workspaceId, createdAt])
+  @@index([status])
+}
+
+model VideoScene {
+  id        String      @id @default(cuid())
+  projectId String
+  index     Int
+  prompt    String      @db.Text
+  seconds   Int
+  status    SceneStatus @default(PENDING)
+  aiJobId   String?
+  clipUrl   String?
+  error     String?
+  attempts  Int         @default(0)
+
+  project VideoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, index])
 }

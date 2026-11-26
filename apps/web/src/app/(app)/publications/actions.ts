@@ -52,6 +52,8 @@ export async function publishAction(_prev: PublishState, fd: FormData): Promise<
       visibility: str(fd, 'visibility') === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC',
       kind: str(fd, 'kind') === 'STORY' ? 'STORY' : 'POST',
       alsoStory: bool(fd, 'alsoStory'),
+      tags: fd.getAll('tags').map(String),
+      thumbnailUrl: str(fd, 'thumbnailUrl') || null,
       groupIds: fd.getAll('groupIds').map(String),
       accountIds: fd.getAll('accountIds').map(String),
       when,

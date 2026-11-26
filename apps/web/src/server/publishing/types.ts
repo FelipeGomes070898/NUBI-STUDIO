@@ -15,6 +15,10 @@ export interface PublishInput {
   kind: PublicationKind;
   title: string;
   description: string;
+  /** Tags (palavras-chave) — usadas pelo YouTube. */
+  tags: string[];
+  /** Capa/thumbnail (URL pública): YouTube (thumbnails.set) e Instagram (capa do Reels). */
+  thumbnailUrl?: string | null;
   visibility: 'PUBLIC' | 'PRIVATE';
   media: PublishMedia;
 }

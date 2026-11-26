@@ -8,11 +8,13 @@ const NAV: Array<[string, string, string]> = [
   ['/accounts', '◎', 'Contas sociais'],
   ['/ai', '✧', 'Central de IA'],
   ['/ai/studio', '✎', 'Estúdio de IA'],
+  ['/characters', '☺', 'Personagens'],
+  ['/studio', '▶', 'Estúdio de vídeos'],
   ['/publications', '➤', 'Publicações'],
   ['/goals', '✓', 'Metas da semana'],
   ['/billing', '$', 'Custos e consumo'],
 ];
-const SOON = ['Estúdio de vídeos', 'Biblioteca de mídia', 'Calendário', 'Analytics'];
+const SOON = ['Biblioteca de mídia', 'Calendário', 'Analytics'];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (

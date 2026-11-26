@@ -84,11 +84,17 @@ export default async function AIPage({ searchParams }: { searchParams: Search })
 
       <form action={createProviderAction} className="card" style={{ marginTop: 14 }}>
         <h3>Adicionar provedor</h3>
-        <p style={{ margin: '4px 0 0', fontSize: 12 }}>Funciona com qualquer API no formato OpenAI (<code>/models</code>, <code>/chat/completions</code>, <code>/images/generations</code>, <code>/audio/speech</code>): gateways unificados, OpenRouter, OpenAI etc. Use a URL base exatamente como a documentação do provedor indica (geralmente termina em <code>/v1</code>).</p>
+        <p style={{ margin: '4px 0 0', fontSize: 12 }}>Para <strong>vídeo (Veo)</strong> cadastre também um provedor do tipo <em>Google Gemini</em> com a chave do Google AI Studio. Para o resto, qualquer API no formato OpenAI (<code>/models</code>, <code>/chat/completions</code>, <code>/images/generations</code>, <code>/audio/speech</code>): gateways unificados, OpenRouter, OpenAI etc. Use a URL base exatamente como a documentação do provedor indica (geralmente termina em <code>/v1</code>).</p>
         <div className="row" style={{ marginTop: 12 }}>
           <label>Nome<input name="name" required maxLength={60} placeholder="ex.: Meu gateway" /></label>
           <label>Tipo<select name="kind" defaultValue="UNIFIED"><option value="UNIFIED">Gateway unificado</option><option value="DIRECT">Provedor individual</option></select></label>
-          <label>URL base<input name="baseUrl" type="url" required placeholder="https://api.exemplo.com/v1" /></label>
+          <label>Protocolo
+            <select name="adapter" defaultValue="OPENAI_COMPATIBLE">
+              <option value="OPENAI_COMPATIBLE">Padrão OpenAI (gateway, OpenAI, OpenRouter…): texto, imagem, áudio</option>
+              <option value="GOOGLE_GEMINI">Google Gemini / Veo: texto e VÍDEO</option>
+            </select>
+          </label>
+          <label>URL base (no Google, pode deixar vazio)<input name="baseUrl" type="url" placeholder="https://api.exemplo.com/v1" /></label>
           <label>Chave de API<input name="apiKey" type="password" autoComplete="off" required minLength={8} /></label>
           <button>Cadastrar</button>
         </div>
@@ -169,5 +175,5 @@ export default async function AIPage({ searchParams }: { searchParams: Search })
 }
 
 function VideoNote() {
-  return <p className="footnote" style={{ marginTop: 8 }}>Geração de vídeo: o adapter OpenAI-compatível não cobre vídeo (cada gateway tem seu fluxo assíncrono). Os modelos de vídeo podem ser catalogados, mas só executam quando houver adapter para o seu gateway.</p>;
+  return <p className="footnote" style={{ marginTop: 8 }}>Vídeo: o protocolo OpenAI-compatível não cobre vídeo (cada gateway tem seu fluxo). Para gerar vídeo cadastre um provedor do tipo <strong>Google Gemini / Veo</strong> (chave do Google AI Studio), sincronize os modelos, ative o Veo e informe o <strong>preço por segundo</strong>. O Estúdio de vídeos usa os modelos escolhidos aqui: <em>Criar roteiro</em> e <em>Legendas e descrições</em> (texto, ex.: Claude), <em>Gerar imagens</em> (thumbnail, ex.: ChatGPT) e <em>Gerar vídeos</em> (Veo).</p>;
 }

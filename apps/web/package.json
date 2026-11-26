@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@prisma/client": "^6.0.0",
     "@social-manager/db": "workspace:*",
     "@vercel/blob": "^2.9.0",

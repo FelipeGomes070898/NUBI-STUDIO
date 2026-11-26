@@ -35,7 +35,7 @@ beforeEach(() => { log = []; handler = (_r, _b, res) => res.writeHead(404).end('
 const json = (res: http.ServerResponse, status: number, o: unknown, headers: Record<string, string> = {}) =>
   res.writeHead(status, { 'content-type': 'application/json', ...headers }).end(JSON.stringify(o));
 
-const input = (o: Partial<PublishInput> = {}): PublishInput => ({ kind: 'POST',
+const input = (o: Partial<PublishInput> = {}): PublishInput => ({ kind: 'POST', tags: [],
   title: 'Meu vídeo', description: 'Descrição #teste', visibility: 'PUBLIC',
   media: { url: `${base}/media.mp4`, sizeBytes: VIDEO.length, mimeType: 'video/mp4', durationSec: 30 }, ...o,
 });
@@ -324,5 +324,78 @@ describe('YouTube e TikTok não têm story', () => {
   it('recusam story na validação', () => {
     expect(youtubePublisher().validate(input({ kind: 'STORY' })).join(' ')).toMatch(/YouTube: não tem story/);
     expect(tiktokPublisher().validate(input({ kind: 'STORY' })).join(' ')).toMatch(/TikTok: não tem story/);
+  });
+});
+
+describe('tags e thumbnail', () => {
+  const PNG_BYTES = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const yt = (deps = {}) => youtubePublisher({ uploadBase: `${base}/upload/youtube/v3`, ...deps });
+  const ytHandler = (thumbStatus = 200) => (req: http.IncomingMessage, _b: Buffer, res: http.ServerResponse) => {
+    if (req.url!.startsWith('/upload/youtube/v3/videos')) return void json(res, 200, {}, { location: `${base}/session/s1` });
+    if (req.url === '/session/s1') return void json(res, 200, { id: 'VID1', status: { privacyStatus: 'public' } });
+    if (req.url!.startsWith('/upload/youtube/v3/thumbnails/set')) return void json(res, thumbStatus, {});
+    if (req.url === '/thumb.png') return void res.writeHead(200, { 'content-type': 'image/png' }).end(PNG_BYTES);
+    res.writeHead(404).end();
+  };
+
+  it('YouTube envia as tags no vídeo e aplica a thumbnail depois do upload', async () => {
+    handler = ytHandler();
+    const r = await yt().publish(acct(), input({ tags: ['corrida', 'parque infantil'], thumbnailUrl: `${base}/thumb.png` }), auth);
+    expect(r.note).toBeUndefined();
+    const init = log.find((l) => l.path.startsWith('/upload/youtube/v3/videos'))!;
+    expect(JSON.parse(init.body.toString()).snippet.tags).toEqual(['corrida', 'parque infantil']);
+    const th = log.find((l) => l.path.startsWith('/upload/youtube/v3/thumbnails/set'))!;
+    expect(th.path).toContain('videoId=VID1');
+    expect(th.headers['content-type']).toBe('image/png');
+    expect(th.headers.authorization).toBe('Bearer TOKEN-1');
+    expect(th.body.equals(PNG_BYTES)).toBe(true);
+  });
+
+  it('thumbnail grande é comprimida antes de enviar; sem conseguir caber vira aviso, não erro', async () => {
+    handler = ytHandler();
+    const fitImage = async (b: Uint8Array) => ({ bytes: new Uint8Array([0xff, 0xd8, 1, 2, 3]), mime: 'image/jpeg' });
+    await yt({ fitImage }).publish(acct(), input({ thumbnailUrl: `${base}/thumb.png` }), auth);
+    const th = log.find((l) => l.path.includes('thumbnails/set'))!;
+    expect(th.headers['content-type']).toBe('image/jpeg');
+    expect(Array.from(th.body)).toEqual([0xff, 0xd8, 1, 2, 3]);
+    log = [];
+    const r = await yt({ fitImage: async () => null }).publish(acct(), input({ thumbnailUrl: `${base}/thumb.png` }), auth);
+    expect(r.platformPostId).toBe('VID1');
+    expect(r.note).toMatch(/não coube nos 2 MB/);
+  });
+
+  it('canal sem verificação (403) ou imagem ilegível: o vídeo sai e o aviso explica', async () => {
+    handler = ytHandler(403);
+    const r = await yt().publish(acct(), input({ thumbnailUrl: `${base}/thumb.png` }), auth);
+    expect(r).toMatchObject({ platformPostId: 'VID1' });
+    expect(r.note).toMatch(/canal precisa estar verificado/);
+    handler = ytHandler();
+    const r2 = await yt().publish(acct(), input({ thumbnailUrl: `${base}/nao-existe.png` }), auth);
+    expect(r2.platformPostId).toBe('VID1');
+    expect(r2.note).toMatch(/não foi possível ler a imagem/);
+  });
+
+  it('sem tags nem thumbnail nada extra é enviado; tags longas demais são recusadas na validação', async () => {
+    handler = ytHandler();
+    await yt().publish(acct(), input(), auth);
+    expect(JSON.parse(log.find((l) => l.path.startsWith('/upload/youtube/v3/videos'))!.body.toString()).snippet.tags).toBeUndefined();
+    expect(log.some((l) => l.path.includes('thumbnails'))).toBe(false);
+    expect(yt().validate(input({ tags: ['x'.repeat(300), 'y'.repeat(300)] }))[0]).toMatch(/tags passam de 500/);
+  });
+
+  it('Instagram usa a thumbnail como capa do Reels (cover_url) e não manda capa no story', async () => {
+    const mediaBodies: Array<Record<string, string>> = [];
+    handler = (req, body, res) => {
+      const u = new URL(req.url!, 'http://x');
+      if (u.pathname === '/graph/IG1/media') { mediaBodies.push(Object.fromEntries(new URLSearchParams(body.toString()))); return void json(res, 200, { id: 'C1' }); }
+      if (u.pathname === '/graph/C1') return void json(res, 200, { status_code: 'FINISHED' });
+      if (u.pathname === '/graph/IG1/media_publish') return void json(res, 200, { id: 'M1' });
+      json(res, 200, {});
+    };
+    const ig = instagramPublisher({ graph: `${base}/graph`, pollIntervalMs: 1 });
+    await ig.publish(acct({ platformAccountId: 'IG1' }), input({ thumbnailUrl: 'https://abc.public.blob.vercel-storage.com/t.png' }), auth);
+    await ig.publish(acct({ platformAccountId: 'IG1' }), input({ kind: 'STORY', thumbnailUrl: 'https://abc.public.blob.vercel-storage.com/t.png' }), auth);
+    expect(mediaBodies[0]!.cover_url).toBe('https://abc.public.blob.vercel-storage.com/t.png');
+    expect(mediaBodies[1]!.cover_url).toBeUndefined();
   });
 });
