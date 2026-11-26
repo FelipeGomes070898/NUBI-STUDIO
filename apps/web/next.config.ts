@@ -1,13 +1,13 @@
 import type { NextConfig } from 'next';
 
-// O FFmpeg (montagem do vídeo) é um binário carregado por caminho dinâmico: o Next não o enxerga sozinho.
-// Incluímos o pacote da plataforma só nas funções que montam vídeo/imagem (Estúdio), para ele ir junto no deploy da Vercel
-// sem inchar as demais (o binário tem ~68 MB e o limite por função é 250 MB).
-const FFMPEG = ['../../node_modules/.pnpm/@ffmpeg-installer+*/node_modules/@ffmpeg-installer/**/*'];
+// O FFmpeg (montagem do vídeo) é um binário carregado por caminho: o Next não o enxerga sozinho.
+// O build copia o binário para um arquivo comum (.ffmpeg/ffmpeg, ver scripts/prepare-ffmpeg.mjs: o empacotador da Vercel não
+// segue os links do pnpm) e o incluímos SÓ nas funções que montam vídeo/imagem (~68 MB; o limite por função é 250 MB).
+const FFMPEG = ['./.ffmpeg/ffmpeg'];
 
 const config: NextConfig = {
   transpilePackages: ['@social-manager/db'],
-  serverExternalPackages: ['@prisma/client', '@ffmpeg-installer/ffmpeg'],
+  serverExternalPackages: ['@prisma/client'],
   outputFileTracingIncludes: {
     '/api/cron/studio': FFMPEG,
     '/studio': FFMPEG,

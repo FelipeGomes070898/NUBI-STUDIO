@@ -3,8 +3,8 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { ffmpegPath, fitImage, renderFinal } from './render';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { _resetFfmpegPath, ffmpegPath, fitImage, renderFinal } from './render';
 
 const sh = promisify(execFile);
 let clip8: Uint8Array;
@@ -99,5 +99,38 @@ describe('fitImage (thumbnail para o limite de 2 MB do YouTube)', () => {
 
   it('se nem a qualidade mínima couber, devolve null (o publicador avisa em vez de falhar)', async () => {
     expect(await fitImage(await bigPng(), 1000)).toBeNull();
+  });
+});
+
+describe('ffmpegPath (onde o binário está no deploy)', () => {
+  it('usa o binário empacotado em .ffmpeg/ffmpeg da pasta atual e, se perdeu a permissão, usa uma cópia executável', async () => {
+    const { mkdir, writeFile, chmod, stat } = await import('node:fs/promises');
+    const dir = await mkdtemp(path.join(tmpdir(), 'cwd-'));
+    await mkdir(path.join(dir, '.ffmpeg'), { recursive: true });
+    const script = path.join(dir, '.ffmpeg', 'ffmpeg');
+    await writeFile(script, '#!/bin/sh\necho fake\n');
+
+    await chmod(script, 0o755);
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    _resetFfmpegPath();
+    expect(await ffmpegPath()).toBe(script); // executável: usa direto
+
+    await chmod(script, 0o644); // como se o empacotador tivesse perdido o bit de execução
+    _resetFfmpegPath();
+    const p = await ffmpegPath();
+    expect(p).not.toBe(script);
+    expect((await stat(p)).mode & 0o111).not.toBe(0); // a cópia é executável
+    expect((await readFile(p)).toString()).toContain('echo fake');
+
+    spy.mockRestore();
+    _resetFfmpegPath();
+    expect(await ffmpegPath()).toBe(bin); // sem .ffmpeg: volta ao pacote
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('FFMPEG_PATH tem prioridade', async () => {
+    process.env.FFMPEG_PATH = '/opt/meu/ffmpeg';
+    expect(await ffmpegPath()).toBe('/opt/meu/ffmpeg');
+    delete process.env.FFMPEG_PATH;
   });
 });

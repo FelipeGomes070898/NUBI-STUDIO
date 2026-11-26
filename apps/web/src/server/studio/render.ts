@@ -1,14 +1,49 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-/** FFmpeg: FFMPEG_PATH (se definido) ou o binário estático do pacote @ffmpeg-installer. */
+/** Locais onde o build deixa o binário (.ffmpeg/ffmpeg): depende de onde a função considera ser a pasta atual. */
+function bundledCandidates(): string[] {
+  const cwd = process.cwd();
+  return [path.join(cwd, '.ffmpeg', 'ffmpeg'), path.join(cwd, 'apps', 'web', '.ffmpeg', 'ffmpeg'), '/var/task/apps/web/.ffmpeg/ffmpeg', '/var/task/.ffmpeg/ffmpeg'];
+}
+
+let resolved: string | null = null;
+
+/** Garante um binário executável: se o arquivo empacotado perdeu a permissão de execução, usa uma cópia em /tmp. */
+async function executable(file: string): Promise<string> {
+  try {
+    await access(file, constants.X_OK);
+    return file;
+  } catch {
+    const copy = path.join(tmpdir(), `ffmpeg-${process.pid}`);
+    await copyFile(file, copy);
+    await chmod(copy, 0o755);
+    return copy;
+  }
+}
+
+/** FFmpeg: FFMPEG_PATH (se definido) → binário empacotado no deploy (.ffmpeg/ffmpeg) → binário do pacote @ffmpeg-installer. */
 export async function ffmpegPath(): Promise<string> {
   if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
-  const mod = await import('@ffmpeg-installer/ffmpeg');
-  return (mod.default ?? (mod as unknown as { path: string })).path;
+  if (resolved) return resolved;
+  for (const c of bundledCandidates()) {
+    try {
+      await access(c, constants.R_OK);
+      return (resolved = await executable(c));
+    } catch { /* próximo */ }
+  }
+  // Nome montado em tempo de execução de propósito: assim o empacotador da Vercel NÃO tenta seguir os links do pnpm até o binário
+  // (isso quebrava o deploy). Esse caminho só serve em desenvolvimento/testes; no deploy vale o .ffmpeg/ffmpeg.
+  const name = process.env.FFMPEG_PACKAGE || ['@ffmpeg-installer', 'ffmpeg'].join('/');
+  const mod = (await import(/* webpackIgnore: true */ name)) as { default?: { path: string }; path?: string };
+  return (resolved = await executable((mod.default?.path ?? mod.path) as string));
 }
+
+/** Só para testes: esquece o caminho já resolvido. */
+export const _resetFfmpegPath = () => { resolved = null; };
 
 type FfmpegError = Error & { stderr: string };
 
