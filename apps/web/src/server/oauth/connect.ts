@@ -6,6 +6,9 @@ import {
   exchangeFacebookCode, exchangeLongLived, fetchGrantedScopes, fetchPages, REQUIRED_FACEBOOK_SCOPE, type FacebookPage, type MetaClient,
 } from './facebook';
 import {
+  exchangeTiktokCode, fetchTiktokProfile, refreshTiktokToken, REQUIRED_TIKTOK_SCOPE, revokeTiktokToken, tiktokCanPublish, type TiktokClient,
+} from './tiktok';
+import {
   exchangeCode, fetchMyChannel, refreshAccessToken, revokeToken, YOUTUBE_SCOPES, type GoogleClient,
 } from './youtube';
 
@@ -38,6 +41,18 @@ export function metaClientFromEnv(): MetaClient {
   }
   return { appId, appSecret };
 }
+
+export function tiktokClientFromEnv(): TiktokClient {
+  const clientKey = process.env.TIKTOK_CLIENT_KEY;
+  const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+  if (!clientKey || !clientSecret) {
+    throw new UserError('Conexão com TikTok não configurada: defina TIKTOK_CLIENT_KEY e TIKTOK_CLIENT_SECRET na Vercel e faça um novo deploy.');
+  }
+  return { clientKey, clientSecret };
+}
+
+export const tiktokConfigured = () => !!process.env.TIKTOK_CLIENT_KEY && !!process.env.TIKTOK_CLIENT_SECRET;
+export const tiktokRedirectUri = (requestUrl: string) => `${appOrigin(requestUrl)}/api/oauth/tiktok/callback`;
 
 export const facebookConfigured = () => !!process.env.META_APP_ID && !!process.env.META_APP_SECRET;
 
@@ -191,6 +206,83 @@ export async function connectFacebookPages(
   }
 }
 
+/**
+ * Conclui a conexão do TikTok: troca o código, lê o perfil e guarda os tokens CRIPTOGRAFADOS.
+ * Mesmas regras do YouTube: com accountId liga a essa conta; sem, reconecta pelo open_id ou cria uma nova.
+ * `canPublish` diz se o TikTok concedeu alguma permissão de vídeo (senão a conta conecta, mas não posta).
+ */
+export async function connectTiktokAccount(
+  input: { workspaceId: string; code: string; redirectUri: string; accountId?: string },
+  client: TiktokClient = tiktokClientFromEnv(),
+) {
+  const tokens = await exchangeTiktokCode(client, { code: input.code, redirectUri: input.redirectUri });
+  if (!tokens.scopes.includes(REQUIRED_TIKTOK_SCOPE)) {
+    throw new UserError('Autorização incompleta: o TikTok não liberou a identificação da conta. Conecte de novo e aceite todas as permissões.');
+  }
+  const profile = await fetchTiktokProfile(client, tokens.accessToken);
+  const canPublish = tiktokCanPublish(tokens.scopes);
+  const data = {
+    platformAccountId: tokens.openId,
+    tokenCiphertext: encryptSecret(tokens.accessToken),
+    refreshTokenCiphertext: encryptSecret(tokens.refreshToken),
+    tokenExpiresAt: tokens.expiresAt,
+    scopes: tokens.scopes,
+    connectionStatus: 'CONNECTED' as const,
+    isActive: true,
+  };
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const same = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'TIKTOK', platformAccountId: tokens.openId } });
+
+      if (input.accountId) {
+        const target = await tx.socialAccount.findFirst({ where: { id: input.accountId, workspaceId: input.workspaceId, platform: 'TIKTOK' } });
+        if (!target) throw new UserError('A conta escolhida não existe ou não é do TikTok.');
+        if (same && same.id !== target.id) {
+          throw new UserError(`Este perfil (${profile.displayName}) já está conectado à conta "${same.displayName}". Use aquela conta ou desconecte-a antes.`);
+        }
+        return { account: await tx.socialAccount.update({ where: { id: target.id }, data }), profile, created: false, canPublish };
+      }
+      if (same) return { account: await tx.socialAccount.update({ where: { id: same.id }, data }), profile, created: false, canPublish };
+
+      const taken = await tx.socialAccount.findFirst({ where: { workspaceId: input.workspaceId, platform: 'TIKTOK', displayName: profile.displayName } });
+      const displayName = taken ? `${profile.displayName} (${tokens.openId.slice(-6)})` : profile.displayName;
+      const account = await tx.socialAccount.create({ data: { ...data, workspaceId: input.workspaceId, platform: 'TIKTOK', displayName } });
+      return { account, profile, created: true, canPublish };
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      throw new UserError('Já existe uma conta com esse nome ou perfil. Renomeie a existente e tente de novo.');
+    }
+    throw e;
+  }
+}
+
+/** Access token do TikTok válido para publicar (~24h). Renova sozinho e salva o refresh token novo (ele pode girar). */
+export async function getTiktokAccessToken(workspaceId: string, accountId: string, client: TiktokClient = tiktokClientFromEnv()): Promise<string> {
+  const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId, platform: 'TIKTOK' } });
+  if (!acc) throw new UserError('Conta não encontrada.');
+  if (acc.connectionStatus !== 'CONNECTED' || !acc.tokenCiphertext || !acc.refreshTokenCiphertext) {
+    throw new UserError(`A conta "${acc.displayName}" não está conectada ao TikTok. Conecte-a em Contas sociais.`);
+  }
+  if (acc.tokenExpiresAt && acc.tokenExpiresAt.getTime() - Date.now() > 60_000) return decryptSecret(acc.tokenCiphertext);
+
+  try {
+    const t = await refreshTiktokToken(client, decryptSecret(acc.refreshTokenCiphertext));
+    await prisma.socialAccount.update({
+      where: { id: acc.id },
+      data: { tokenCiphertext: encryptSecret(t.accessToken), refreshTokenCiphertext: encryptSecret(t.refreshToken), tokenExpiresAt: t.expiresAt },
+    });
+    return t.accessToken;
+  } catch (e) {
+    if (e instanceof ProviderError && /invalid_grant|invalid_refresh|refresh_token/i.test(e.message)) {
+      await prisma.socialAccount.update({ where: { id: acc.id }, data: { connectionStatus: 'EXPIRED' } });
+      throw new UserError(`O acesso da conta "${acc.displayName}" expirou ou foi revogado. Reconecte em Contas sociais.`);
+    }
+    throw e;
+  }
+}
+
 /** Token da Página para publicar. Sem refresh: se a Meta recusar (código 190) o publicador chama markFacebookExpired. */
 export async function getFacebookPageToken(workspaceId: string, accountId: string): Promise<string> {
   const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId, platform: 'FACEBOOK' } });
@@ -238,7 +330,7 @@ export async function getYoutubeAccessToken(workspaceId: string, accountId: stri
 }
 
 /** Revoga no Google (melhor esforço) e apaga os tokens locais. A conta continua cadastrada. */
-export async function disconnectAccount(workspaceId: string, accountId: string, client?: GoogleClient) {
+export async function disconnectAccount(workspaceId: string, accountId: string, client?: GoogleClient, tiktok?: TiktokClient) {
   const acc = await prisma.socialAccount.findFirst({ where: { id: accountId, workspaceId } });
   if (!acc) throw new UserError('Conta não encontrada.');
   let revoked = false;
@@ -247,6 +339,13 @@ export async function disconnectAccount(workspaceId: string, accountId: string, 
       revoked = await revokeToken(client ?? googleClientFromEnv(), decryptSecret(acc.refreshTokenCiphertext));
     } catch {
       revoked = false; // sem credenciais/chave de criptografia: segue com a limpeza local
+    }
+  }
+  if (acc.platform === 'TIKTOK' && acc.tokenCiphertext) {
+    try {
+      revoked = await revokeTiktokToken(tiktok ?? tiktokClientFromEnv(), decryptSecret(acc.tokenCiphertext));
+    } catch {
+      revoked = false;
     }
   }
   await prisma.socialAccount.update({

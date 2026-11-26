@@ -21,8 +21,9 @@ Plataforma web para gerenciar **grupos de contas sociais** e um **estúdio de IA
 | Carteira: saldo, reserva antes da chamada, débito do custo real, extrato, limites | ✅ |
 | Conexão **YouTube** por login Google (OAuth + PKCE), tokens criptografados e renovação automática; páginas públicas de Privacidade e Termos | ✅ (precisa das chaves `GOOGLE_*`) |
 | Conexão **Facebook** (Páginas) por login Meta: uma conta por Página liberada, token da Página criptografado | ✅ (precisa das chaves `META_*`) |
+| Conexão **TikTok** por login (OAuth), tokens criptografados e renovação automática | ✅ (precisa das chaves `TIKTOK_*`) |
 | Geração de **vídeo** | ⏳ precisa de adapter para o seu gateway (ver `docs/INTEGRATION_CONTRACT.md`) |
-| Upload de vídeo para o YouTube, OAuth do TikTok, agendamento, calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
+| Envio de vídeo para YouTube, Facebook e TikTok, agendamento, calendário, analytics, FFmpeg | ⏳ próximas etapas (ver `ROADMAP.md`) |
 
 > Os adapters foram testados contra um **servidor simulado** no padrão OpenAI, não contra um gateway real. Antes de confiar em produção, rode o fluxo com a sua chave real (e um saldo pequeno).
 
@@ -77,3 +78,12 @@ Com a tela de consentimento em modo "Teste", o acesso expira em 7 dias: publique
 4. Novo deploy → *Contas sociais* → **Conectar com Facebook** → na tela da Meta, escolha as Páginas.
 
 Com o app em modo **Desenvolvimento**, só quem tem função no app (administrador, desenvolvedor ou testador) consegue conectar, e só Páginas que essa pessoa administra. Para Páginas de terceiros sem dar função a eles, o app precisa ir para o modo **Ativo** com Acesso Avançado (revisão do app e, em geral, verificação da empresa). O token da Página não tem refresh: se a Meta o recusar (código 190), a conta vira "token expirado" e pede reconexão.
+
+## Conectar o TikTok
+1. [developers.tiktok.com](https://developers.tiktok.com) → *Manage apps* → criar app → adicionar os produtos **Login Kit** e **Content Posting API** (habilite *Direct Post* se quiser publicar direto).
+2. No Login Kit, registre o **Redirect URI**: `<seu-domínio>/api/oauth/tiktok/callback`. Preencha as URLs de Termos (`<seu-domínio>/termos`) e Privacidade (`<seu-domínio>/privacidade`).
+3. O TikTok exige **verificar a propriedade das URLs** (*URL properties*). Para um domínio `*.vercel.app` use *URL prefix*: baixe o arquivo `tiktokXXXX.txt` que o portal fornece e coloque em `apps/web/public/` (o middleware já deixa `tiktok*.txt` abrir sem login).
+4. Variáveis (Sensitive): `TIKTOK_CLIENT_KEY` e `TIKTOK_CLIENT_SECRET`. Opcional: `TIKTOK_SCOPES` (padrão `user.info.basic,video.upload,video.publish`; se o portal recusar um escopo por o produto ainda não estar liberado, remova-o).
+5. Novo deploy → *Contas sociais* → **Conectar com TikTok**.
+
+Enquanto o app não passar na auditoria do TikTok, as postagens diretas ficam restritas (privadas) e só contas de teste (*Sandbox*) conseguem autorizar. Contas conectadas sem permissão de vídeo aparecem marcadas "sem permissão de publicar vídeo". O refresh token do TikTok pode girar a cada renovação; o sistema sempre salva o novo.

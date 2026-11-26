@@ -34,6 +34,7 @@ export async function deleteAccountAction(fd: FormData) {
 export async function disconnectAccountAction(fd: FormData) {
   await run('/accounts', async (ws) => {
     const r = await disconnectAccount(ws, str(fd, 'entityId'));
+    if (r.platform === 'TIKTOK') return r.revoked ? 'Perfil desconectado e acesso revogado no TikTok.' : 'Perfil desconectado aqui. Para remover o acesso também no TikTok, vá em Configurações → Segurança e permissões → Apps e serviços.';
     if (r.platform === 'FACEBOOK') return 'Página desconectada aqui. Para remover o acesso do app também no Facebook, vá em Configurações → Apps e sites.';
     return r.revoked ? 'Conta desconectada e acesso revogado no Google.' : 'Conta desconectada aqui. Se quiser, remova também o acesso em myaccount.google.com/permissions.';
   });

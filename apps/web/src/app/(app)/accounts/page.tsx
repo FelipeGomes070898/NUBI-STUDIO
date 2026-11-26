@@ -2,7 +2,8 @@ import { prisma } from '@social-manager/db';
 import { Flash, type Search } from '@/components/Flash';
 import { PLATFORMS, PLATFORM_ICON, PLATFORM_LABEL } from '@/lib/labels';
 import { getWorkspace } from '@/server/workspace';
-import { facebookConfigured, youtubeConfigured } from '@/server/oauth/connect';
+import { facebookConfigured, tiktokConfigured, youtubeConfigured } from '@/server/oauth/connect';
+import { tiktokCanPublish } from '@/server/oauth/tiktok';
 import { createAccountAction, deleteAccountAction, disconnectAccountAction, toggleAccountAction } from './actions';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
   const q = await searchParams;
   const yt = youtubeConfigured();
   const fb = facebookConfigured();
+  const tt = tiktokConfigured();
   const ws = await getWorkspace();
   const [accounts, clients] = await Promise.all([
     prisma.socialAccount.findMany({
@@ -33,7 +35,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
       <div className="pageHead">
         <div>
           <h1>Contas sociais</h1>
-          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. YouTube e Facebook já têm conexão; o TikTok virá depois.</p>
+          <p>Cada página, canal ou perfil individual. Conecte o canal com o login da conta (OAuth) para o sistema poder publicar. Contas cadastradas à mão ficam “aguardando OAuth”. YouTube, Facebook e TikTok já têm conexão.</p>
         </div>
       </div>
       <Flash ok={q.ok} error={q.error} />
@@ -57,6 +59,17 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
             {!fb && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Falta configurar <code>META_APP_ID</code> e <code>META_APP_SECRET</code> na Vercel (e fazer um novo deploy).</p>}
           </div>
           <div className="noflex">{fb ? <a className="btn" href="/api/oauth/facebook/start">Conectar com Facebook</a> : <button disabled>Conectar com Facebook</button>}</div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <div>
+            <h3>Conectar perfil do TikTok</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 13 }}>Entre com o TikTok e autorize. O perfil é cadastrado e conectado de uma vez.</p>
+            {!tt && <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--warn)' }}>Falta configurar <code>TIKTOK_CLIENT_KEY</code> e <code>TIKTOK_CLIENT_SECRET</code> na Vercel (e fazer um novo deploy).</p>}
+          </div>
+          <div className="noflex">{tt ? <a className="btn" href="/api/oauth/tiktok/start">Conectar com TikTok</a> : <button disabled>Conectar com TikTok</button>}</div>
         </div>
       </div>
 
@@ -93,10 +106,14 @@ export default async function AccountsPage({ searchParams }: { searchParams: Sea
                     <td>
                       <span className={`badge ${tone}`}>{label}</span>
                       {a.connectionStatus === 'CONNECTED' && a.tokenExpiresAt && <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>acesso renova sozinho</div>}
+                      {a.platform === 'TIKTOK' && a.connectionStatus === 'CONNECTED' && !tiktokCanPublish(a.scopes) && <div style={{ fontSize: 11, marginTop: 4, color: 'var(--warn)' }}>sem permissão de publicar vídeo</div>}
                     </td>
                     <td>{a.memberships.length ? a.memberships.map((m) => m.group.name).join(', ') : <span className="dim">—</span>}</td>
                     <td>{a.client?.name ?? <span className="dim">—</span>}</td>
                     <td className="num">
+                      {a.platform === 'TIKTOK' && tt && (
+                        <><a className="btn secondary small" href={`/api/oauth/tiktok/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
+                      )}
                       {a.platform === 'FACEBOOK' && fb && (
                         <><a className="btn secondary small" href={`/api/oauth/facebook/start?accountId=${a.id}`}>{a.connectionStatus === 'CONNECTED' ? 'Reconectar' : 'Conectar'}</a>{' '}</>
                       )}

@@ -12,5 +12,6 @@ export async function middleware(req: NextRequest) {
   return NextResponse.redirect(url);
 }
 
-export const config = { // Públicas: /login e as páginas legais exigidas pelas telas de consentimento (Google, Meta, TikTok).
-matcher: ['/((?!login|privacidade|termos|_next/static|_next/image|favicon.ico).*)'] };
+export const config = { // Públicas: /login, as páginas legais exigidas pelas telas de consentimento (Google, Meta, TikTok) e o
+// arquivo tiktok*.txt de verificação de propriedade da URL (o TikTok o baixa sem sessão).
+matcher: ['/((?!login|privacidade|termos|tiktok[A-Za-z0-9]*\\.txt|_next/static|_next/image|favicon.ico).*)'] };
